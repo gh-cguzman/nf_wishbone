@@ -17,8 +17,6 @@ include { CREATE_COVERAGE_MATRIX                     } from '../modules/local/cu
 
 workflow WISHBONE {
 
-    runMessage()
-
     ch_versions = Channel.empty()
 
     // Create a channel from input

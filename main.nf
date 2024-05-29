@@ -51,6 +51,7 @@ include { WISHBONE } from './workflows/wishbone'
 // WORKFLOW: Run main genece/tfbscov pipeline
 //
 workflow GENECE_WISHBONE {
+    runMessage()
     WISHBONE ()
 }
 
