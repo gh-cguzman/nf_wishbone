@@ -8,7 +8,7 @@ process GCPARAGON {
     tuple val(meta), path(bam), path(bai)
 
     output:
-    tuple val(meta), path("gc_corrected/*/*.GCtagged.bam"), path("gc_corrected/*/*.GCtagged.bam.bai"), emit: bam_bai
+    tuple val(meta), path("**/*.GCtagged.bam"), path("**/*.GCtagged.bam.bai"), emit: bam_bai
 
     when:
     task.ext.when == null || task.ext.when
