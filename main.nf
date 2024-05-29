@@ -11,7 +11,7 @@ def runMessage() {
     //
     // ANSII Colours used for terminal logging
     //
-    public static Map logColours(Boolean monochrome_logs) {
+    Map logColours(Boolean monochrome_logs) {
         Map colorcodes = [:]
 
         // Reset / Meta
@@ -79,16 +79,16 @@ def runMessage() {
     //
     // Does what is says on the tin
     //
-    public static String dashedLine(monochrome_logs) {
+    String dashedLine(monochrome_logs) {
         Map colors = logColours(monochrome_logs)
         return "-${colors.dim}----------------------------------------------------${colors.reset}-"
     }
 
     Map colors = logColours(monochrome_logs)
-    
+
     String.format(
-        log.info """
-                                GENECE WISHBONE PIPELINE INFORMATION
+        """
+            ${colors.purple}GENECE WISHBONE PIPELINE INFORMATION${colors.reset}
             ${dashedLine(monochrome_logs)}
 
             INPUT OPTIONS
@@ -118,7 +118,7 @@ def runMessage() {
             PIPELINE VERSION:   ${params.version}
 
             ${dashedLine(monochrome_logs)}
-            """
+        """
     )
 }
 
