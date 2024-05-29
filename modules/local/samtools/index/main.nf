@@ -5,8 +5,6 @@ process SAMTOOLS_INDEX {
     conda (params.enable_conda ? 'bioconda::samtools=1.20' : null)
     container = 'ghcguzman/samtools1.20'
 
-    errorStrategy 'ignore'
-
     input:
     tuple val(meta), path(bam)
 
