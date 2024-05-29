@@ -83,7 +83,7 @@ nextflow.enable.dsl = 2
 
 def runMessage() {
     
-    Map colors = logColours(monochrome_logs)
+    Map colors = logColours(params.monochrome_logs)
 
     String.format(
         """
