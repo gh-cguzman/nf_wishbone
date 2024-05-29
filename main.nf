@@ -7,11 +7,11 @@ nextflow.enable.dsl = 2
     RUN INFORMATION LOGGING
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 */
-def runMessage() {
-    //
+
+//
     // ANSII Colours used for terminal logging
     //
-    Map logColours(Boolean monochrome_logs) {
+    public static Map logColours(Boolean monochrome_logs) {
         Map colorcodes = [:]
 
         // Reset / Meta
@@ -76,14 +76,13 @@ def runMessage() {
         return colorcodes
     }
 
-    //
-    // Does what is says on the tin
-    //
-    String dashedLine(monochrome_logs) {
+    public static String dashedLine(monochrome_logs) {
         Map colors = logColours(monochrome_logs)
         return "-${colors.dim}----------------------------------------------------${colors.reset}-"
     }
 
+def runMessage() {
+    
     Map colors = logColours(monochrome_logs)
 
     String.format(
