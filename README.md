@@ -23,6 +23,7 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input 'inp
 ### Starting with GC-corrected BAM files
 ```
 nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input 'input.tsv' --gc_corrected
+```
 
 **NOTE:** The `--gc_corrected` argument is required if you want to avoid running `gcparagon` on the bam files and proceed directly to feature extraction.
 
