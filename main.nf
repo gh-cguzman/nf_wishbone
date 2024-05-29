@@ -88,7 +88,6 @@ def runMessage() {
     Map colors = logColours(monochrome_logs)
 
     log.info """
-${dashedLine(monochrome_logs)}
 ${colors.bipurple}GENECE WISHBONE PIPELINE INFORMATION${colors.reset}
 ${dashedLine(monochrome_logs)}
 
