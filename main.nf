@@ -9,7 +9,7 @@ nextflow.enable.dsl = 2
 */
 def runMessage() {
     log.info """
-                                GENECE WISHBONE PIPELINE INFORMATION
+                              GENECE WISHBONE PIPELINE INFORMATION
         ===============================================================================
 
         INPUT OPTIONS
@@ -55,7 +55,7 @@ include { WISHBONE } from './workflows/wishbone'
 //
 workflow GENECE_WISHBONE {
     runMessage()
-    
+
     WISHBONE ()
 }
 
