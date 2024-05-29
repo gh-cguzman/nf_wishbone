@@ -34,6 +34,13 @@ nextflow run gh-cguzman/nf_tfbscov -r main -profile server88 --input input.tsv
 
 **NOTE:** This command assumes that you are working in an environment that has all the necessary packages installed. Docker is not available on the `.88`.
 
+### Running the pipeline on the `GCG` server
+```
+nextflow run gh-cguzman/nf_tfbscov -r main -profile robin14 --input input.tsv
+```
+
+**NOTE:** This command assumes that you are working in an environment that has all the necessary packages installed. Docker is not available on GCG's `robin14`.
+
 ## TODO
 
 ## CHANGELOG
