@@ -9,33 +9,36 @@ nextflow.enable.dsl = 2
 */
 def runMessage() {
     log.info """
-
-                       RUN INFORMATION
-        =================================================
+                                GENECE WISHBONE PIPELINE INFORMATION
+        ===============================================================================
 
         INPUT OPTIONS
-        =============
-        Input File:         ${params.input}
-        Regions   :         ${params.regions}
-        Blacklist :         ${params.blacklist}
+        -------------
+        Input TSV:          ${params.input}
+        Profiles:           ${workflow.profile}
 
         OUTPUT OPTIONS
-        ==============
+        --------------
         Output Directory:   ${params.outdir}
 
         GC CORRECTION OPTIONS
-        =====================
+        ---------------------
         GC Correction?      ${params.gc_corrected}
 
+        GCPARAGON OPTIONS
+        -----------------
+        Genome:             ${params.rgb}
+
+
         SKIP OPTIONS
-        ============
+        ------------
         Skip FEMS?          ${params.skip_fems}
         Skip Coverage?      ${params.skip_coverage}
 
 
-        PIPELINE VERSION:    ${params.version}
+        PIPELINE VERSION:   ${params.version}
 
-        =================================================
+        ===============================================================================
         """
 }
 
@@ -52,6 +55,7 @@ include { WISHBONE } from './workflows/wishbone'
 //
 workflow GENECE_WISHBONE {
     runMessage()
+    
     WISHBONE ()
 }
 
