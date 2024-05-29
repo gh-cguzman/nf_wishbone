@@ -88,39 +88,39 @@ def runMessage() {
     Map colors = logColours(monochrome_logs)
 
     log.info """
-        ${dashedLine(monochrome_logs)}
-        ${colors.bipurple}GENECE WISHBONE PIPELINE INFORMATION${colors.reset}
-        ${dashedLine(monochrome_logs)}
+${dashedLine(monochrome_logs)}
+${colors.bipurple}GENECE WISHBONE PIPELINE INFORMATION${colors.reset}
+${dashedLine(monochrome_logs)}
 
-        ${colors.green}INPUT OPTIONS${colors.reset}
-        ${dashedLine(monochrome_logs)}
-        Input TSV:          ${params.input}
-        Profiles:           ${workflow.profile}
-        ${dashedLine(monochrome_logs)}
+${colors.green}INPUT OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+Input TSV:          ${params.input}
+Profiles:           ${workflow.profile}
+${dashedLine(monochrome_logs)}
 
-        ${colors.green}OUTPUT OPTIONS${colors.reset}
-        ${dashedLine(monochrome_logs)}
-        Output Directory:   ${params.outdir}
-        ${dashedLine(monochrome_logs)}
+${colors.green}OUTPUT OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+Output Directory:   ${params.outdir}
+${dashedLine(monochrome_logs)}
 
-        ${colors.green}GC CORRECTION OPTIONS${colors.reset}
-        ${dashedLine(monochrome_logs)}
-        GC Correction?      ${params.gc_corrected}
-        ${dashedLine(monochrome_logs)}
+${colors.green}GC CORRECTION OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+GC Correction?      ${params.gc_corrected}
+${dashedLine(monochrome_logs)}
 
-        ${colors.green}GCPARAGON OPTIONS${colors.reset}
-        ${dashedLine(monochrome_logs)}
-        Genome:             ${params.rgb}
-        ${dashedLine(monochrome_logs)}
+${colors.green}GCPARAGON OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+Genome:             ${params.rgb}
+${dashedLine(monochrome_logs)}
 
-        ${colors.green}SKIP OPTIONS${colors.reset}
-        ${dashedLine(monochrome_logs)}
-        Skip FEMS?          ${params.skip_fems}
-        Skip Coverage?      ${params.skip_coverage}
-        ${dashedLine(monochrome_logs)}
+${colors.green}SKIP OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+Skip FEMS?          ${params.skip_fems}
+Skip Coverage?      ${params.skip_coverage}
+${dashedLine(monochrome_logs)}
 
-        ${colors.green}PIPELINE VERSION:${colors.reset}   ${params.version}
-        ${dashedLine(monochrome_logs)}
+${colors.green}PIPELINE VERSION:${colors.reset}   ${params.version}
+${dashedLine(monochrome_logs)}
         """
 }
 
