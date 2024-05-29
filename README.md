@@ -10,26 +10,26 @@ Take a TSV of samples, apply fragment-based GC correction, then generate GC-corr
 
 ## Updating the pipeline
 ```
-nextflow pull gh-cguzman/nf_tfbscov
+nextflow pull gh-cguzman/nf_wishbone
 ```
 
 ## Running the pipeline
 
 ### Starting with **NON** GC-corrected BAM files
 ```
-nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input 'input.tsv' 
+nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv
 ```
 
 ### Starting with GC-corrected BAM files
 ```
-nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input 'input.tsv' --gc_corrected
+nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv --gc_corrected
 ```
 
 **NOTE:** The `--gc_corrected` argument is required if you want to avoid running `gcparagon` on the bam files and proceed directly to feature extraction.
 
 ### Running the pipeline on the `.88` server
 ```
-nextflow run gh-cguzman/nf_tfbscov -r main -profile server88 --input 'input.tsv'
+nextflow run gh-cguzman/nf_tfbscov -r main -profile server88 --input input.tsv
 ```
 
 **NOTE:** This command assumes that you are working in an environment that has all the necessary packages installed. Docker is not available on the `.88`.

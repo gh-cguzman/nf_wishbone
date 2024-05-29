@@ -20,7 +20,7 @@ process CREATE_COVERAGE_MATRIX {
     def prefix = task.ext.prefix ?: "${meta.sample_id}"
     """
     bam2cov.py \\
-    --bam $file \\
+    --bam $bam \\
     --regions $regions \\
     --blacklist $blacklist \\
     --outcounts ${prefix}.1Mb_bins.tsv \\
