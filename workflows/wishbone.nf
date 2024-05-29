@@ -34,7 +34,7 @@ workflow WISHBONE {
     //
     // MODULE: CREATE INDEX FOR EACH BAM USING SAMTOOLS
     //
-    SAMTOOLS_INDEX_ONE( input_files )
+    SAMTOOLS_INDEX_ONE( ch_input )
 
     //
     // MODULE: CORRECT FOR GC BIAS USING GCPARAGON
