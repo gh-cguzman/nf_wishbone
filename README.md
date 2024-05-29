@@ -29,14 +29,14 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input inpu
 
 ### Running the pipeline on the `.88` server
 ```
-nextflow run gh-cguzman/nf_tfbscov -r main -profile server88 --input input.tsv
+nextflow run gh-cguzman/nf_wishbonecov -r main -profile server88 --input input.tsv
 ```
 
 **NOTE:** This command assumes that you are working in an environment that has all the necessary packages installed. Docker is not available on the `.88`.
 
 ### Running the pipeline on the `GCG` server
 ```
-nextflow run gh-cguzman/nf_tfbscov -r main -profile robin14 --input input.tsv
+nextflow run gh-cguzman/nf_wishbonecov -r main -profile robin14 --input input.tsv
 ```
 
 **NOTE:** This command assumes that you are working in an environment that has all the necessary packages installed.
