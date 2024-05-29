@@ -17,7 +17,7 @@ process GCPARAGON {
     def args = task.ext.args ?: ''
     """
     gcparagon \\
-    --bam $file \\
+    --bam $bam \\
     --output-bam \\
     --rgb ${params.rgb} \\
     --threads $task.cpus
