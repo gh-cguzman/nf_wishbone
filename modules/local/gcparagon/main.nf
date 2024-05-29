@@ -19,7 +19,7 @@ process GCPARAGON {
     gcparagon \\
     --bam $bam \\
     --output-bam \\
-    --rgb ${params.rgb} \\
+    -rgb ${params.rgb} \\
     --threads $task.cpus
     """
 }
