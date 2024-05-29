@@ -113,7 +113,6 @@ def runMessage() {
         Genome:             ${params.rgb}
         ${dashedLine(monochrome_logs)}
 
-
         ${colors.green}SKIP OPTIONS${colors.reset}
         ${dashedLine(monochrome_logs)}
         Skip FEMS?          ${params.skip_fems}
@@ -121,7 +120,6 @@ def runMessage() {
         ${dashedLine(monochrome_logs)}
 
         ${colors.green}PIPELINE VERSION:${colors.reset}   ${params.version}
-
         ${dashedLine(monochrome_logs)}
         """
 }
