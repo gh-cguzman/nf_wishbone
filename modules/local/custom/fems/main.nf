@@ -19,8 +19,8 @@ process CREATE_FEMS_MATRIX {
     """
     bam2fems.py \\
     --bam $bam \\
-    --out_em ${prefix}.EM.df.tsv \\
-    --out_fems ${prefix}.FEMS.df.tsv \\
-    --out_qc ${prefix}.QC.df.tsv
+    --out_em ${bam.baseName}.EM.df.tsv \\
+    --out_fems ${bam.baseName}.FEMS.df.tsv \\
+    --out_qc ${bam.baseName}.QC.df.tsv
     """
 }

@@ -23,9 +23,9 @@ process CREATE_COVERAGE_MATRIX {
     --bam $bam \\
     --regions $regions \\
     --blacklist $blacklist \\
-    --outcounts ${prefix}.1Mb_bins.tsv \\
-    --outlog ${prefix}.log \\
+    --outcounts ${bam.baseName}.1Mb_bins.tsv \\
+    --outlog ${bam.baseName}.log \\
     --threads $task.cpus \\
-    --sample ${prefix}
+    --sample ${bam.baseName}
     """
 }
