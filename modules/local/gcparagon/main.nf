@@ -3,6 +3,7 @@ process GCPARAGON {
     label 'process_high'
 
     //container = 'ghcguzman/samtools1.20'
+    errorStrategy 'ignore'
 
     input:
     tuple val(meta), path(bam), path(bai)
