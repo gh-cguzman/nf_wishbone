@@ -45,6 +45,8 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile robin14 --input input.tsv
 
 1. Create docker containers for each step to ensure reproducibility.
 
+2. Change output of COVERAGE matrix to reflect GENECE pipeline input.
+
 ## CHANGELOG
 
 `May 29, 2024` : Created first version of the `WISHBONE` pipeline.

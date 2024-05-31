@@ -23,9 +23,13 @@ process CREATE_COVERAGE_MATRIX {
     --bam $bam \\
     --regions $regions \\
     --blacklist $blacklist \\
-    --outcounts ${bam.baseName}.1Mb_bins.tsv \\
+    --outcounts ${bam.baseName}.1Mb_bins.tsv.tmp \\
     --outlog ${bam.baseName}.log \\
     --threads $task.cpus \\
     --sample ${bam.baseName}
+
+    convert.py \\
+    --cov ${bam.baseName}.1Mb_bins.tsv.tmp \\
+    --output ${bam.baseName}.1Mb_bins.tsv
     """
 }
