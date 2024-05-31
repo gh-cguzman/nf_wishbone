@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser(description='Process some files.')
     parser.add_argument('--cov', type=str, required=True, help='Path to the cov file')
     parser.add_argument('--output', type=str, required=True, help='Path to the output TSV file')
+    parser.add_argument('--sample_id', type=str, required=True, help='Sample ID')
     parser.add_argument('--cov_loci_cols', type=int, nargs=3, default=[0, 1, 2], help='Column indices for loci in cov file')
     parser.add_argument('--cov_value_col', type=int, default=3, help='Column index for values in cov file')
 
@@ -27,7 +28,7 @@ def main():
     df_cov = read_cov(args.cov)
     print(f'\nRunning {file_name} ...')
 
-    final_df = convert(df_cov, sample_id, 
+    final_df = convert(df_cov, args.sample_id, 
                        args.cov_loci_cols, args.cov_value_col)
 
     final_df.to_csv(args.output, sep='\t', index=True)

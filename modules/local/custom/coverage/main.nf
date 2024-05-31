@@ -30,6 +30,7 @@ process CREATE_COVERAGE_MATRIX {
 
     convert.py \\
     --cov ${bam.baseName}.1Mb_bins.tsv.tmp \\
+    --sample_id ${meta.sample_id} \\
     --output ${bam.baseName}.1Mb_bins.tsv
     """
 }
