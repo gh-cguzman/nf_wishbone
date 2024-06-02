@@ -45,8 +45,6 @@ workflow WISHBONE {
             .set { ch_input }
     }
 
-    ch_input.view()
-
     //
     // MODULE: CREATE INDEX FOR EACH BAM USING SAMTOOLS
     //
