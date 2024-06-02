@@ -43,6 +43,10 @@ workflow WISHBONE {
                     [ meta, file(bam)]
             }
             .set { ch_input }
+    } else if (params.input && params.bam) {
+        error "You cannot set both --input and --bams! Choose one or the other."
+    } else if (!params.input && !params.bam) {
+        error "You must set either --input or --bams!"
     }
 
     //
@@ -64,7 +68,7 @@ workflow WISHBONE {
     //
     // MODULE: CORRECT FOR END MOTIF BIAS USING CUSTOM
     //
-    if (params.gc_correction && params.em_correction) {
+    if (params.em_correction) {
         EMCORRECTION(
             ch_bam_bai_gc,
             file(params.genome_2bit),
