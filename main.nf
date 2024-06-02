@@ -94,6 +94,7 @@ ${dashedLine(monochrome_logs)}
 ${colors.green}INPUT OPTIONS${colors.reset}
 ${dashedLine(monochrome_logs)}
 Input TSV:          ${params.input}
+Input BAM:          ${params.bams}
 Profiles:           ${workflow.profile}
 ${dashedLine(monochrome_logs)}
 
@@ -104,7 +105,12 @@ ${dashedLine(monochrome_logs)}
 
 ${colors.green}GC CORRECTION OPTIONS${colors.reset}
 ${dashedLine(monochrome_logs)}
-GC Correction?      ${params.gc_corrected}
+GC Correction?      ${params.gc_correction}
+${dashedLine(monochrome_logs)}
+
+${colors.green}END MOTIF CORRECTION OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+EM Correction?      ${params.em_correction}
 ${dashedLine(monochrome_logs)}
 
 ${colors.green}GCPARAGON OPTIONS${colors.reset}
