@@ -27,7 +27,7 @@ def main():
     args = parser.parse_args()
 
     df_cov = read_cov(args.cov)
-    print(f'\nRunning {file_name} ...')
+    print(f'\nRunning {args.sample_id} ...')
 
     final_df = convert(df_cov, args.sample_id, 
                        args.cov_loci_cols, args.cov_value_col)

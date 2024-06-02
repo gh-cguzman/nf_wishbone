@@ -62,4 +62,4 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile robin14 --input input.tsv
 
 `May 29, 2024` : Created first version of the `WISHBONE` pipeline.
 
-`June ??, 2024` : Implemented `WISHBONE` pipeline `v2`. Changed output of COVERAGE matrix to reflect GENECE pipeline input. Added preliminary end-motif correction. Added `--gc_correction` and `--em_correction` parameters.
+`June 02, 2024` : Implemented `WISHBONE` pipeline `v2`. Changed output of COVERAGE matrix to reflect GENECE pipeline input. Added preliminary end-motif correction. Added `--gc_correction` and `--em_correction` parameters.
