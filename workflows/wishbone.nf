@@ -34,7 +34,15 @@ workflow WISHBONE {
             }
             .set { ch_input }
     } else if (params.bams) {
-        ch_input = Channel.fromPath(params.bams, checkIfExists: true)
+        Channel
+            .fromPath(params.bams, checkIfExists: true)
+            .map {
+                bam ->
+                    def meta = [:]
+                    meta.sample_id = ${bam.baseName}
+                    [ meta, file(bam)]
+            }
+            .set { ch_input }
     }
 
     //
