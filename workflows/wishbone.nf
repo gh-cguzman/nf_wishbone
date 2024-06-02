@@ -39,11 +39,13 @@ workflow WISHBONE {
             .map {
                 bam ->
                     def meta = [:]
-                    meta.sample_id = ${bam.baseName}
+                    meta.sample_id = bam.baseName
                     [ meta, file(bam)]
             }
             .set { ch_input }
     }
+
+    ch_input.view()
 
     //
     // MODULE: CREATE INDEX FOR EACH BAM USING SAMTOOLS
