@@ -62,10 +62,11 @@ def process_bam(inBam, EM_out, FEMS_out, QC_out):
             continue
 
         gc_tag = read.get_tag("GC") if read.has_tag("GC") else 1
+        em_tag = read.get_tag("EM") if read.has_tag("EM") else 1
 
         key = (end_motif, insert_size)
-        EM_count[end_motif] += gc_tag
-        FEMS_count[key] += gc_tag
+        EM_count[end_motif] += gc_tag * em_tag
+        FEMS_count[key] += gc_tag * em_tag
 
     bamfile.close()
 

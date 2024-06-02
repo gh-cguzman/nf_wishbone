@@ -15,17 +15,30 @@ nextflow pull gh-cguzman/nf_wishbone
 
 ## Running the pipeline
 
-### Starting with **NON** GC-corrected BAM files
+### Starting with **NON** corrected BAM files
 ```
 nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv
 ```
-
-### Starting with GC-corrected BAM files
+OR
 ```
-nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv --gc_corrected
+nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --bams '*.bam'
 ```
 
-**NOTE:** The `--gc_corrected` argument is required if you want to avoid running `gcparagon` on the bam files and proceed directly to feature extraction.
+**NOTE:** The ''s are necessary for Nextflow to properly create channels of bam files.
+
+### GC Correction
+```
+nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv --gc_correction
+```
+
+**NOTE:** The `--gc_correction` argument is required if you want to run `gcparagon` on your bam files.
+
+### End Motif Correction
+```
+nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv --gc_correction --em_correction
+```
+
+**NOTE:** The `--gc_correction` **AND** `--em_correction` arguments are required if you want to run end motif correction on your bam files.
 
 ### Running the pipeline on the `.88` server
 ```
@@ -45,8 +58,8 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile robin14 --input input.tsv
 
 1. Create docker containers for each step to ensure reproducibility.
 
-2. Change output of COVERAGE matrix to reflect GENECE pipeline input.
-
 ## CHANGELOG
 
 `May 29, 2024` : Created first version of the `WISHBONE` pipeline.
+
+`June ??, 2024` : Implemented `WISHBONE` pipeline `v2`. Changed output of COVERAGE matrix to reflect GENECE pipeline input. Added preliminary end-motif correction. Added `--gc_correction` and `--em_correction` parameters.

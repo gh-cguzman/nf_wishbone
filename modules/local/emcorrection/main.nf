@@ -1,4 +1,4 @@
-process GCPARAGON {
+process EMCORRECTION {
     tag "$meta.sample_id"
     label 'process_high'
 
@@ -6,9 +6,11 @@ process GCPARAGON {
 
     input:
     tuple val(meta), path(bam), path(bai)
+    path(genome)
+    path(blacklist)
 
     output:
-    tuple val(meta), path("**/*.GCtagged.bam"), path("**/*.GCtagged.bam.bai"), emit: bam_bai
+    tuple val(meta), path("*.EMtagged.bam"), emit: bam
 
     when:
     task.ext.when == null || task.ext.when
@@ -16,11 +18,11 @@ process GCPARAGON {
     script:
     def args = task.ext.args ?: ''
     """
-    gcparagon \\
-    --bam $bam \\
-    --output-bam \\
-    -rgb ${params.rgb} \\
-    --threads $task.cpus \\
-    --out-dir gc_corrected
+    emcorrection.py \\
+    -i $bam \\
+    -r $genome \\
+    -e $blacklist \\
+    -o ${bam.baseName}.EMtagged.bam \\
+    --threads $task.cpus
     """
 }
