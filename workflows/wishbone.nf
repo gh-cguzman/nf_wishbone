@@ -43,6 +43,10 @@ workflow WISHBONE {
                     [ meta, file(bam)]
             }
             .set { ch_input }
+    } else if (params.input && params.bam) {
+        error "You cannot set both --input and --bams! Choose one or the other."
+    } else if (!params.input && !params.bam) {
+        error "You must set either --input or --bams!"
     }
 
     //
