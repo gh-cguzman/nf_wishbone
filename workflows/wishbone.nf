@@ -7,6 +7,7 @@
 include { SAMTOOLS_INDEX as SAMTOOLS_INDEX_ONE       } from '../modules/local/samtools/index/main.nf'
 include { SAMTOOLS_INDEX as SAMTOOLS_INDEX_TWO       } from '../modules/local/samtools/index/main.nf'
 include { GCPARAGON                                  } from '../modules/local/gcparagon/main.nf'
+include { EMCORRECTION                               } from '../modules/local/emcorrection/main.nf'
 include { CREATE_FEMS_MATRIX                         } from '../modules/local/custom/fems/main.nf'
 include { CREATE_COVERAGE_MATRIX                     } from '../modules/local/custom/coverage/main.nf'
 
