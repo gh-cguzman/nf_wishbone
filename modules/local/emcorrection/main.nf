@@ -1,7 +1,7 @@
 process EMCORRECTION {
     tag "$meta.sample_id"
     label 'process_medium'
-    maxForks 10
+    maxForks 5
 
     //container = 'ghcguzman/samtools1.20'
 
