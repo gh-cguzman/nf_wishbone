@@ -22,9 +22,9 @@ workflow WISHBONE {
 
     ch_versions = Channel.empty()
 
-    ch_2bit = Channel.fromPath(params.genome_2bit, checkIfExists: true)
-    ch_blacklist = Channel.fromPath(params.blacklist, checkIfExists: true)
-    ch_regions = Channel.fromPath(params.regions, checkIfExists: true)
+    ch_2bit = file(params.genome_2bit)
+    ch_blacklist = file(params.blacklist)
+    ch_regions = file(params.regions)
 
     // Create a channel from input
     if (params.input) {
