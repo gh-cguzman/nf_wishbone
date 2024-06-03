@@ -84,7 +84,7 @@ workflow WISHBONE {
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
 
-        ch_samtools_two_bam_bai = SAMTOOLS_INDEX_ONE.out.bam_bai
+        ch_samtools_two_bam_bai = SAMTOOLS_INDEX_TWO.out.bam_bai
 
         ch_bam_bai_em = ch_samtools_two_bam_bai
     } else {
