@@ -111,6 +111,7 @@ ${dashedLine(monochrome_logs)}
 ${colors.green}END MOTIF CORRECTION OPTIONS${colors.reset}
 ${dashedLine(monochrome_logs)}
 EM Correction?      ${params.em_correction}
+2bit File:          ${params.genome_2bit}
 ${dashedLine(monochrome_logs)}
 
 ${colors.green}GCPARAGON OPTIONS${colors.reset}
