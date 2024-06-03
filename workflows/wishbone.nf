@@ -59,68 +59,45 @@ workflow WISHBONE {
     //
     SAMTOOLS_INDEX_ONE( ch_input )
 
-    SAMTOOLS_INDEX_ONE
-        .map {
-            meta, bam, bai ->
-                [ meta, bam, bai ]
-        }
-        .set { ch_samtools }
-
     //
-    // MODULE: CORRECT FOR GC BIAS USING GCPARAGON
+    // MODULE: CORRECT FOR GC AND END MOTIF BIAS
     //
-    if (params.gc_correction) {
-        GCPARAGON( ch_samtools )
+    if (params.gc_correction && params.em_correction) {
+        GCPARAGON( SAMTOOLS_INDEX_ONE.out.bam_bai )
 
-        GCPARAGON
-        .map {
-            meta, bam, bai ->
-                [ meta, bam, bai ]
-        }
-        .set { ch_gcparagon }
-
-    } else {
-        ch_samtools
-        .map {
-            meta, bam, bai ->
-                [ meta, bam, bai ]
-        }
-        .set { ch_gcparagon }
-    }
-
-    //
-    // MODULE: CORRECT FOR END MOTIF BIAS USING CUSTOM
-    //
-    if (params.em_correction) {
         EMCORRECTION(
-            ch_gcparagon,
+            GCPARAGON.out.bam_bai,
             ch_2bit,
             ch_blacklist
         )
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
 
-        SAMTOOLS_INDEX_TWO
-        .map {
-            meta, bam, bai ->
-                [ meta, bam, bai ]
-        }
-        .set { ch_emcorrection }
+        ch_corrected_bams = SAMTOOLS_INDEX_TWO.out.bam_bai
 
+    } else if (params.gc_correction && !params.em_correction) {
+        GCPARAGON( SAMTOOLS_INDEX_ONE.out.bam_bai )
+
+        ch_corrected_bams = GCPARAGON.out.bam_bai
+    } else if (!params.gc_correction && params.em_correction) {
+        EMCORRECTION(
+            SAMTOOLS_INDEX_ONE.out.bam_bai,
+            ch_2bit,
+            ch_blacklist
+        )
+
+        SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
+
+        ch_corrected_bams = SAMTOOLS_INDEX_TWO.out.bam_bai
     } else {
-        ch_gcparagon
-        .map {
-            meta, bam, bai ->
-                [ meta, bam, bai ]
-        }
-        .set { ch_emcorrection }
+        error "Something wierd happened. Cry and contact Carlos."
     }
 
     //
     // MODULE: CREATE FEMS MATRIX
     //
     if (!params.skip_fems) {
-        CREATE_FEMS_MATRIX( ch_emcorrection )
+        CREATE_FEMS_MATRIX( ch_corrected_bams )
     }
 
     //
@@ -128,7 +105,7 @@ workflow WISHBONE {
     //
     if (!params.skip_coverage) {
         CREATE_COVERAGE_MATRIX(
-            ch_emcorrection,
+            ch_corrected_bams,
             ch_regions,
             ch_blacklist
         )
@@ -138,6 +115,6 @@ workflow WISHBONE {
     // MODULE: CREATE TFBS FEATURES
     //
     if (!params.skip_tfbscov) {
-        CREATE_TFBSCOV_MATRIX( ch_emcorrection )
+        CREATE_TFBSCOV_MATRIX( ch_corrected_bams )
     }
 }
