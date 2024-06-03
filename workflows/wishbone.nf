@@ -21,6 +21,10 @@ workflow WISHBONE {
 
     ch_versions = Channel.empty()
 
+    ch_2bit = Channel.fromPath(params.genome_2bit, checkIfExists: true)
+    ch_blacklist = Channel.fromPath(params.blacklist, checkIfExists: true)
+    ch_regions = Channel.fromPath(params.regions, checkIfExists: true)
+
     // Create a channel from input
     if (params.input) {
         Channel
@@ -46,7 +50,7 @@ workflow WISHBONE {
     } else if (params.input && params.bam) {
         error "You cannot set both --input and --bams! Choose one or the other."
     } else if (!params.input && !params.bam) {
-        error "You must set either --input or --bams!"
+        error "You must set one of --input or --bams! You set neither."
     }
 
     //
@@ -71,8 +75,8 @@ workflow WISHBONE {
     if (params.em_correction) {
         EMCORRECTION(
             ch_bam_bai_gc,
-            file(params.genome_2bit),
-            file(params.blacklist)
+            ch_2bit,
+            ch_blacklist
         )
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
@@ -95,8 +99,8 @@ workflow WISHBONE {
     if (!params.skip_coverage) {
         CREATE_COVERAGE_MATRIX(
             ch_bam_bai_em,
-            file(params.regions),
-            file(params.blacklist)
+            ch_regions,
+            ch_blacklist
         )
     }
 }
