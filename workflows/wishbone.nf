@@ -59,17 +59,33 @@ workflow WISHBONE {
     //
     SAMTOOLS_INDEX_ONE( ch_input )
 
-    ch_samtools_one_bam_bai = SAMTOOLS_INDEX_ONE.out.bam_bai
+    SAMTOOLS_INDEX_ONE
+        .map {
+            meta, bam, bai ->
+                [ meta, bam, bai ]
+        }
+        .set { ch_samtools }
 
     //
     // MODULE: CORRECT FOR GC BIAS USING GCPARAGON
     //
     if (params.gc_correction) {
-        GCPARAGON( ch_samtools_one_bam_bai )
+        GCPARAGON( ch_samtools )
 
-        ch_bam_bai_gc = GCPARAGON.out.bam_bai
+        GCPARAGON
+        .map {
+            meta, bam, bai ->
+                [ meta, bam, bai ]
+        }
+        .set { ch_gcparagon }
+
     } else {
-        ch_bam_bai_gc = ch_samtools_one_bam_bai
+        ch_samtools
+        .map {
+            meta, bam, bai ->
+                [ meta, bam, bai ]
+        }
+        .set { ch_gcparagon }
     }
 
     //
@@ -77,25 +93,34 @@ workflow WISHBONE {
     //
     if (params.em_correction) {
         EMCORRECTION(
-            ch_bam_bai_gc,
+            ch_gcparagon,
             ch_2bit,
             ch_blacklist
         )
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
 
-        ch_samtools_two_bam_bai = SAMTOOLS_INDEX_TWO.out.bam_bai
+        SAMTOOLS_INDEX_TWO
+        .map {
+            meta, bam, bai ->
+                [ meta, bam, bai ]
+        }
+        .set { ch_emcorrection }
 
-        ch_bam_bai_em = ch_samtools_two_bam_bai
     } else {
-        ch_bam_bai_em = ch_samtools_two_bam_bai
+        ch_gcparagon
+        .map {
+            meta, bam, bai ->
+                [ meta, bam, bai ]
+        }
+        .set { ch_emcorrection }
     }
 
     //
     // MODULE: CREATE FEMS MATRIX
     //
     if (!params.skip_fems) {
-        CREATE_FEMS_MATRIX( ch_bam_bai_em )
+        CREATE_FEMS_MATRIX( ch_emcorrection )
     }
 
     //
@@ -103,7 +128,7 @@ workflow WISHBONE {
     //
     if (!params.skip_coverage) {
         CREATE_COVERAGE_MATRIX(
-            ch_bam_bai_em,
+            ch_emcorrection,
             ch_regions,
             ch_blacklist
         )
@@ -113,6 +138,6 @@ workflow WISHBONE {
     // MODULE: CREATE TFBS FEATURES
     //
     if (!params.skip_tfbscov) {
-        CREATE_TFBSCOV_MATRIX( ch_bam_bai_em )
+        CREATE_TFBSCOV_MATRIX( ch_emcorrection )
     }
 }
