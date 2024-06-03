@@ -10,6 +10,7 @@ include { GCPARAGON                                  } from '../modules/local/gc
 include { EMCORRECTION                               } from '../modules/local/emcorrection/main.nf'
 include { CREATE_FEMS_MATRIX                         } from '../modules/local/custom/fems/main.nf'
 include { CREATE_COVERAGE_MATRIX                     } from '../modules/local/custom/coverage/main.nf'
+include { CREATE_TFBSCOV_MATRIX                      } from '../modules/local/custom/tfbscov/main.nf'
 
 /*
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -58,15 +59,17 @@ workflow WISHBONE {
     //
     SAMTOOLS_INDEX_ONE( ch_input )
 
+    ch_samtools_one_bam_bai = SAMTOOLS_INDEX_ONE.out.bam_bai
+
     //
     // MODULE: CORRECT FOR GC BIAS USING GCPARAGON
     //
     if (params.gc_correction) {
-        GCPARAGON( SAMTOOLS_INDEX_ONE.out.bam_bai )
+        GCPARAGON( ch_samtools_one_bam_bai )
 
         ch_bam_bai_gc = GCPARAGON.out.bam_bai
     } else {
-        ch_bam_bai_gc = SAMTOOLS_INDEX_ONE.out.bam_bai
+        ch_bam_bai_gc = ch_samtools_one_bam_bai
     }
 
     //
@@ -81,9 +84,11 @@ workflow WISHBONE {
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
 
-        ch_bam_bai_em = SAMTOOLS_INDEX_TWO.out.bam_bai
+        ch_samtools_two_bam_bai = SAMTOOLS_INDEX_ONE.out.bam_bai
+
+        ch_bam_bai_em = ch_samtools_two_bam_bai
     } else {
-        ch_bam_bai_em = ch_bam_bai_gc
+        ch_bam_bai_em = ch_samtools_two_bam_bai
     }
 
     //
@@ -102,5 +107,12 @@ workflow WISHBONE {
             ch_regions,
             ch_blacklist
         )
+    }
+
+    //
+    // MODULE: CREATE TFBS FEATURES
+    //
+    if (!params.skip_tfbscov) {
+        CREATE_TFBSCOV_MATRIX( ch_bam_bai_em )
     }
 }

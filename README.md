@@ -58,6 +58,8 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile robin14 --input input.tsv
 
 1. Create docker containers for each step to ensure reproducibility.
 
+2. Implement TFBSCov.
+
 ## CHANGELOG
 
 `May 29, 2024` : Created first version of the `WISHBONE` pipeline.
