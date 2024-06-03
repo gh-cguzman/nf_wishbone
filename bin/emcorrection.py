@@ -3,24 +3,30 @@ import argparse
 import pysam
 import numpy as np
 from collections import defaultdict
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 from functools import partial
 import random
 import logging
 import twobitreader
 from scipy.ndimage import gaussian_filter
+import os
 
 # Define constants
 MIN_FRAGMENT_LENGTH = 50
 MAX_FRAGMENT_LENGTH = 550
 RANDOM_SEED = random.randint(1, 999)
+CHROMOSOMES_TO_PROCESS = set(
+    ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", 
+     "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", 
+     "chr18", "chr19", "chr20", "chr21", "chr22"]
+)
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Correct end motif bias using 5' end motifs.")
     parser.add_argument("-i", "--input_bam", required=True, help="Input BAM file.")
     parser.add_argument("-r", "--reference_genome", required=True, help="Reference genome file in 2bit format.")
     parser.add_argument("-e", "--exclusion_bed", required=True, help="Exclusion BED file.")
-    parser.add_argument("-o", "--output_bam", help="Output tagged BAM file.")
+    parser.add_argument("-o", "--output_bam", required=True, help="Output tagged BAM file.")
     parser.add_argument("-n", "--num_simulations", type=int, default=200000000, help="Number of simulations for expected attributes.")
     parser.add_argument("--simulation_rounds", type=int, default=4, help="Number of simulation rounds.")
     parser.add_argument("--output_observed", action='store_true', help="Output TSV file for observed counts.")
@@ -29,7 +35,7 @@ def parse_args():
     parser.add_argument("--mask_threshold", type=int, default=10, help="Threshold for masking rare attributes.")
     parser.add_argument("--smoothing_sigma", type=float, default=1.0, help="Sigma value for Gaussian smoothing of weights.")
     parser.add_argument("--iqr_factor", type=float, default=1.5, help="Factor for IQR-based outlier limiting.")
-    parser.add_argument("--threads", type=int, default=1, help="Number of threads to use.")
+    parser.add_argument("--threads", type=int, default=cpu_count(), help="Number of threads to use.")
     args = parser.parse_args()
     return args
 
@@ -91,19 +97,28 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions, _):
         if 'N' not in end_motif:
             return (length, end_motif)
 
+def simulate_round(ref_genome, fragment_lengths, excluded_regions, num_simulations):
+    simulated_attributes = defaultdict(int)
+    simulate_partial = partial(simulate_fragment, ref_genome, fragment_lengths, excluded_regions)
+    results = [simulate_partial(_) for _ in range(num_simulations)]
+    for length, end_motif in results:
+        simulated_attributes[(length, end_motif)] += 1
+    return simulated_attributes
+
 def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, rounds, threads):
     logger = setup_logging()
+    logger.info(f"Simulating {num_simulations} expected attributes ...")
+    total_simulations = num_simulations // rounds
+    simulations_per_thread = total_simulations // threads
+    pool = Pool(threads)
+    simulate_partial = partial(simulate_round, ref_genome, fragment_lengths, excluded_regions)
+    results = pool.map(simulate_partial, [simulations_per_thread] * threads)
+    pool.close()
+    pool.join()
     simulated_attributes = defaultdict(int)
-    logger.info("Simulating expected attributes ...")
-    for round in range(rounds):
-        logger.info(f"Simulation round {round + 1} of {rounds}: Simulating {len(range(num_simulations // rounds))} fragments ...")
-        pool = Pool(threads)
-        simulate_partial = partial(simulate_fragment, ref_genome, fragment_lengths, excluded_regions)
-        results = pool.map(simulate_partial, range(num_simulations // rounds))
-        pool.close()
-        pool.join()
-        for length, end_motif in results:
-            simulated_attributes[(length, end_motif)] += 1
+    for result in results:
+        for key, count in result.items():
+            simulated_attributes[key] += count
     return simulated_attributes
 
 def mask_rare_attributes(observed, threshold=10):
@@ -174,20 +189,24 @@ def compute_weights(observed, expected):
             weights[key] = 1.0  # Default weight for rare/absent attributes
     return weights
 
-def apply_weights(bam_file, weights, output_bam):
+def apply_weights_to_chromosome(input_bam, weights, output_bam_prefix, chromosomes):
     logger = setup_logging()
-    logger.info("Applying weights and writing to output BAM file ...")
-    with pysam.AlignmentFile(bam_file, "rb") as bam, \
-         pysam.AlignmentFile(output_bam, "wb", header=bam.header) as out_bam:
-        for read in bam:
-            if read.is_proper_pair and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH:
-                seq = read.query_sequence
-                length = len(seq)
-                end_motif = seq[:4]
-                if 'N' not in end_motif:
-                    weight = weights.get((length, end_motif), 1.0)
-                    read.set_tag("EM", weight)  # Adding weight as a custom tag
-                    out_bam.write(read)
+    logger.info(f"Applying weights to chromosomes {chromosomes} and writing to temporary BAM file ...")
+    tmp_output_bam = f"{output_bam_prefix}_{chromosomes[0]}.bam"
+    with pysam.AlignmentFile(input_bam, "rb") as bam, \
+         pysam.AlignmentFile(tmp_output_bam, "wb", header=bam.header) as out_bam:
+        for chrom in chromosomes:
+            if chrom in CHROMOSOMES_TO_PROCESS:
+                for read in bam.fetch(chrom):
+                    if read.is_proper_pair and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH:
+                        seq = read.query_sequence
+                        length = len(seq)
+                        end_motif = seq[:4]
+                        if 'N' not in end_motif:
+                            weight = weights.get((length, end_motif), 1.0)
+                            read.set_tag("EM", weight)  # Adding weight as a custom tag
+                            out_bam.write(read)
+    return tmp_output_bam
 
 def load_reference_genome(reference_genome_file):
     logger = setup_logging()
@@ -200,6 +219,33 @@ def write_to_tsv(data, output_file):
         for key, value in data.items():
             length, motif = key
             f.write(f"{length}\t{motif}\t{value}\n")
+
+def distribute_chromosomes(chromosomes, num_threads):
+    """Distribute chromosomes evenly across the available threads."""
+    for i in range(0, len(chromosomes), num_threads):
+        yield chromosomes[i:i + num_threads]
+
+def sort_bam(temp_bam):
+    sorted_temp_file = f"{temp_bam}.sorted.bam"
+    pysam.sort("-o", sorted_temp_file, temp_bam)
+    os.remove(temp_bam)  # Clean up the temporary unsorted BAM file
+    return sorted_temp_file
+
+def sort_and_merge_bams(temp_bam_files, output_bam, threads):
+    logger = setup_logging()
+    logger.info(f"Sorting temporary BAM files ...")
+
+    # Sort each temporary BAM file in parallel
+    with Pool(threads) as pool:
+        sorted_temp_files = pool.map(sort_bam, temp_bam_files)
+
+    # Merge sorted BAM files
+    logger.info(f"Merging temporary BAM files into final BAM file ...")
+    pysam.merge("-f", output_bam, *sorted_temp_files)
+
+    # Clean up sorted temporary BAM files
+    for sorted_temp_file in sorted_temp_files:
+        os.remove(sorted_temp_file)
 
 def main():
     args = parse_args()
@@ -234,13 +280,19 @@ def main():
     # Limit outliers in weights
     limited_weights = limit_outliers(smoothed_weights, factor=args.iqr_factor)
 
-    # Apply weights and write to output BAM
-    if args.output_bam:
-        apply_weights(args.input_bam, limited_weights, args.output_bam)
+    # Distribute chromosomes across threads
+    bam_file = args.input_bam
+    chromosomes = [chrom for chrom in pysam.AlignmentFile(bam_file).references if chrom in CHROMOSOMES_TO_PROCESS]
+    chromosome_groups = list(distribute_chromosomes(chromosomes, args.threads))
 
-    # Write smoothed weights to TSV by default
-    if args.output_freq:
-        write_to_tsv(limited_weights, 'smoothed_weights.tsv')
+    # Parallelize BAM tagging
+    temp_bam_files = []
+    with Pool(args.threads) as pool:
+        apply_partial = partial(apply_weights_to_chromosome, bam_file, limited_weights, args.output_bam)
+        temp_bam_files = pool.map(apply_partial, chromosome_groups)
+
+    # Sort and merge temporary BAM files
+    sort_and_merge_bams(temp_bam_files, args.output_bam, args.threads)
 
     # Write observed and expected counts to TSV files if specified
     if args.output_observed:

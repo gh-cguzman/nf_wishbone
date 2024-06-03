@@ -1,6 +1,6 @@
 process EMCORRECTION {
     tag "$meta.sample_id"
-    label 'process_high'
+    label 'process_highest'
 
     //container = 'ghcguzman/samtools1.20'
 
