@@ -40,7 +40,7 @@ workflow WISHBONE {
                 bam ->
                     def meta = [:]
                     meta.sample_id = bam.baseName
-                    [ meta, file(bam) ]
+                    [ meta, bam ]
             }
             .set { ch_input }
     } else if (params.input && params.bam) {
