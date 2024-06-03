@@ -1,6 +1,6 @@
 process SAMTOOLS_INDEX {
     tag "$meta.sample_id"
-    label 'process_low'
+    label 'process_single'
 
     conda (params.enable_conda ? 'bioconda::samtools=1.20' : null)
     container = 'ghcguzman/samtools1.20'

@@ -1,6 +1,6 @@
 process EMCORRECTION {
     tag "$meta.sample_id"
-    label 'process_highest'
+    label 'process_medium'
     maxForks 10
 
     //container = 'ghcguzman/samtools1.20'
