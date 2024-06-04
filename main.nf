@@ -123,6 +123,7 @@ ${colors.green}SKIP OPTIONS${colors.reset}
 ${dashedLine(monochrome_logs)}
 Skip FEMS?          ${params.skip_fems}
 Skip Coverage?      ${params.skip_coverage}
+Skip TFBSCov?       ${params.skip_tfbscov}
 ${dashedLine(monochrome_logs)}
 
 ${colors.green}PIPELINE VERSION:${colors.reset}   ${params.version}
