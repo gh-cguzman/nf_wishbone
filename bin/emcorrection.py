@@ -100,7 +100,7 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions, _):
 
 def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, threads):
     logger = setup_logging()
-    logger.info(f"Simulating {num_simulations} expected attributes ...")
+    logger.info(f"Simulating {num_simulations} expected attributes ... Splitting into {num_simulations // threads} per thread ...")
 
     simulations_per_thread = num_simulations // threads
     pool = Pool(threads)

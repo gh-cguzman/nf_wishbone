@@ -56,12 +56,12 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile robin14 --input input.tsv
 
 ## TODO
 
-1. Create docker containers for each step to ensure reproducibility.
-
-2. Implement TFBSCov.
+1. Create docker containers for each step to ensure reproducibility. There are issues here with Docker permissions on GCG server, and Singularity not liking `arm64` Docker images.
 
 ## CHANGELOG
 
 `May 29, 2024` : Created first version of the `WISHBONE` pipeline.
 
 `June 02, 2024` : Implemented `WISHBONE` pipeline `v2`. Changed output of COVERAGE matrix to reflect GENECE pipeline input. Added preliminary end-motif correction. Added `--gc_correction` and `--em_correction` parameters.
+
+`June 04, 2024` : Added preliminary `TFBSCov` feature workflow.

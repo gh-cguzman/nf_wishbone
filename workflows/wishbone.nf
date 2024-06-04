@@ -26,6 +26,8 @@ workflow WISHBONE {
     ch_blacklist = file(params.blacklist)
     ch_regions = file(params.regions)
 
+    ch_motif_beds    = Channel.fromPath(params.motif_beds, checkIfExists: true).collect()
+
     // Create a channel from input
     if (params.input) {
         Channel
@@ -90,7 +92,7 @@ workflow WISHBONE {
 
         ch_corrected_bams = SAMTOOLS_INDEX_TWO.out.bam_bai
     } else {
-        error "Something wierd happened. Definetely panic and contact Carlos."
+        error "Something wierd happened. Definitely panic and contact Carlos."
     }
 
     //
@@ -115,6 +117,9 @@ workflow WISHBONE {
     // MODULE: CREATE TFBS FEATURES
     //
     if (!params.skip_tfbscov) {
-        CREATE_TFBSCOV_MATRIX( ch_corrected_bams )
+        CREATE_TFBSCOV_MATRIX(
+            ch_corrected_bams,
+            ch_motif_beds
+        )
     }
 }
