@@ -26,7 +26,7 @@ workflow WISHBONE {
     ch_blacklist = file(params.blacklist)
     ch_regions = file(params.regions)
 
-    ch_motif_beds    = Channel.fromPath(params.motif_beds, checkIfExists: true).collect()
+    ch_motif_beds = Channel.fromPath(params.motif_beds, checkIfExists: true).collect()
 
     // Create a channel from input
     if (params.input) {
