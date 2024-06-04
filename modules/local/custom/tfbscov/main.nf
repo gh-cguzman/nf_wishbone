@@ -12,8 +12,8 @@ process CREATE_TFBSCOV_MATRIX {
     tuple val(meta), path("*.mat.smoothed.norm.tsv")     , emit: smooth_norm_mat
     tuple val(meta), path("*.mat.raw.tsv")               , emit: raw_mat
     tuple val(meta), path("*.features.smoothed.norm.tsv"), emit: smooth_norm_features
-    tuple val(meta), path("plots/*.coverage_plot.png")   , emit: cov_png
-    tuple val(meta), path("plots/*.fft_plot.png")        , emit: fft_png
+    tuple val(meta), path("plots/*coverage_plot.png")   , emit: cov_png
+    tuple val(meta), path("plots/*fft_plot.png")        , emit: fft_png
 
     when:
     task.ext.when == null || task.ext.when

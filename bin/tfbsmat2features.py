@@ -33,20 +33,20 @@ def calculate_features(df, plot_dir):
         central_coverage_start = max(center_index - 30, 0)
         central_coverage_end = min(center_index + 31, len(coverage))
         central_coverage = np.mean(coverage[central_coverage_start: central_coverage_end])
-        logging.info(f"Calculated central coverage for {sample_id}")
+        #logging.info(f"Calculated central coverage for {sample_id}")
 
         # Mean coverage
         mean_coverage_start = max(center_index - 1000, 0)
         mean_coverage_end = min(center_index + 1001, len(coverage))
         mean_coverage = np.mean(coverage[mean_coverage_start: mean_coverage_end])
-        logging.info(f"Calculated mean coverage for {sample_id}")
+        #logging.info(f"Calculated mean coverage for {sample_id}")
 
         # Amplitude (using Fast Fourier Transform)
         fft_start = max(center_index - 960, 0)
         fft_end = min(center_index + 961, len(coverage))
         fft_result = np.abs(fft(coverage[fft_start: fft_end]))
         amplitude = fft_result[10]
-        logging.info(f"Calculated FFT amplitude for {sample_id}")
+        #logging.info(f"Calculated FFT amplitude for {sample_id}")
 
         # Global maxima and minima within +/- 250 bp regions
         region_start = max(center_index - 200, 0)
@@ -64,7 +64,7 @@ def calculate_features(df, plot_dir):
                          global_maxima_right, global_maxima_left,
                          global_minima_right, global_minima_left])
         
-        logging.info(f"Calculated global maxima and minima for {sample_id}")
+        #logging.info(f"Calculated global maxima and minima for {sample_id}")
 
         # Plotting Coverage Profile
         plt.figure(figsize=(5, 5))
