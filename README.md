@@ -5,8 +5,10 @@ Take a TSV of samples, apply fragment-based GC correction, then generate GC-corr
 ## Pipeline Steps
 
 1. Compute genome-wide fragment-based GC bias for each sample and correct (GCparagon).
-2. Compute GC-corrected COVERAGE matrix (custom).
-3. Compute GC-corrected FEMS matrix (custom).
+2. Compute genome-wide fragment-based EM bias for each sample and correct (custom).
+3. Compute bias-corrected COVERAGE features (custom).
+4. Compute bias-corrected FEMS features (custom).
+5. Compute bias-corrected TFBSCov features (custom).
 
 ## Updating the pipeline
 ```
@@ -38,7 +40,7 @@ nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input inpu
 nextflow run gh-cguzman/nf_wishbone -r main -profile macbook,docker --input input.tsv --gc_correction --em_correction
 ```
 
-**NOTE:** The `--gc_correction` **AND** `--em_correction` arguments are required if you want to run end motif correction on your bam files.
+**NOTE:** The `--gc_correction` **AND** `--em_correction` arguments are required if you want to run gc correction and end motif correction respectively on your bam files. Setting only one or the other will only carry out their respective corrections. By default the pipeline assumes that the input is **ALREADY** bias corrected and will do neither.
 
 ### Running the pipeline on the `.88` server
 ```
