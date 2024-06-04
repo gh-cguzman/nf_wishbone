@@ -23,6 +23,7 @@ process EMCORRECTION {
     -r $genome \\
     -e $blacklist \\
     -o ${bam.baseName}.EMtagged.bam \\
-    --threads $task.cpus
+    --threads $task.cpus \\
+    --sort_bam
     """
 }

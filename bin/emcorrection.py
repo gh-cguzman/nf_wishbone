@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--smoothing_sigma", type=float, default=1.0, help="Sigma value for Gaussian smoothing of weights.")
     parser.add_argument("--iqr_factor", type=float, default=1.5, help="Factor for IQR-based outlier limiting.")
     parser.add_argument("--threads", type=int, default=cpu_count(), help="Number of threads to use.")
+    parser.add_argument("--sort_bam", action="store_true", help="Sort and merge output BAM file.")
     args = parser.parse_args()
     return args
 
@@ -97,28 +98,32 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions, _):
         if 'N' not in end_motif:
             return (length, end_motif)
 
-def simulate_round(ref_genome, fragment_lengths, excluded_regions, num_simulations):
+def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, threads):
+    logger = setup_logging()
+    logger.info(f"Simulating {num_simulations} expected attributes ...")
+
+    simulations_per_thread = num_simulations // threads
+    pool = Pool(threads)
+    random_seeds = [random.randint(0, 999) for _ in range(threads)]
+    simulate_partial = partial(simulate_round, ref_genome, fragment_lengths, excluded_regions, simulations_per_thread)
+    results = pool.map(simulate_partial, random_seeds)
+    pool.close()
+    pool.join()
+
+    simulated_attributes = defaultdict(int)
+    for result in results:
+        for key, count in result.items():
+            simulated_attributes[key] += count
+
+    return simulated_attributes
+
+def simulate_round(ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed):
+    random.seed(random_seed)
     simulated_attributes = defaultdict(int)
     simulate_partial = partial(simulate_fragment, ref_genome, fragment_lengths, excluded_regions)
     results = [simulate_partial(_) for _ in range(num_simulations)]
     for length, end_motif in results:
         simulated_attributes[(length, end_motif)] += 1
-    return simulated_attributes
-
-def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, rounds, threads):
-    logger = setup_logging()
-    logger.info(f"Simulating {num_simulations} expected attributes ...")
-    total_simulations = num_simulations // rounds
-    simulations_per_thread = total_simulations // threads
-    pool = Pool(threads)
-    simulate_partial = partial(simulate_round, ref_genome, fragment_lengths, excluded_regions)
-    results = pool.map(simulate_partial, [simulations_per_thread] * threads)
-    pool.close()
-    pool.join()
-    simulated_attributes = defaultdict(int)
-    for result in results:
-        for key, count in result.items():
-            simulated_attributes[key] += count
     return simulated_attributes
 
 def mask_rare_attributes(observed, threshold=10):
@@ -265,7 +270,7 @@ def main():
     fragment_lengths = [length for (length, motif) in observed_attributes.keys()]
 
     # Simulate expected attributes
-    expected_attributes = simulate_attributes(ref_genome, fragment_lengths, excluded_regions, args.num_simulations, args.simulation_rounds, args.threads)
+    expected_attributes = simulate_attributes(ref_genome, fragment_lengths, excluded_regions, args.num_simulations, args.threads)
 
     # Compute bias correction weights
     weights = compute_weights(observed_attributes, expected_attributes)
@@ -280,7 +285,7 @@ def main():
     # Limit outliers in weights
     limited_weights = limit_outliers(smoothed_weights, factor=args.iqr_factor)
 
-    # Distribute chromosomes across threads
+     # Distribute chromosomes across threads
     bam_file = args.input_bam
     chromosomes = [chrom for chrom in pysam.AlignmentFile(bam_file).references if chrom in CHROMOSOMES_TO_PROCESS]
     chromosome_groups = list(distribute_chromosomes(chromosomes, args.threads))
@@ -291,8 +296,11 @@ def main():
         apply_partial = partial(apply_weights_to_chromosome, bam_file, limited_weights, args.output_bam)
         temp_bam_files = pool.map(apply_partial, chromosome_groups)
 
-    # Sort and merge temporary BAM files
-    sort_and_merge_bams(temp_bam_files, args.output_bam, args.threads)
+    # Sort and merge temporary BAM files if --sort is specified
+    if args.sort_bam:
+        sort_and_merge_bams(temp_bam_files, args.output_bam, args.threads)
+    else:
+        logger.info("Skipping sorting and merging of temporary BAM files.")
 
     # Write observed and expected counts to TSV files if specified
     if args.output_observed:
