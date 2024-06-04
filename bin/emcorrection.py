@@ -3,18 +3,16 @@ import argparse
 import pysam
 import numpy as np
 from collections import defaultdict
-from multiprocessing import Pool, cpu_count
-from functools import partial
 import random
 import logging
 import twobitreader
 from scipy.ndimage import gaussian_filter
+from joblib import Parallel, delayed
 import os
 
 # Define constants
 MIN_FRAGMENT_LENGTH = 50
 MAX_FRAGMENT_LENGTH = 550
-RANDOM_SEED = random.randint(1, 999)
 CHROMOSOMES_TO_PROCESS = set(
     ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", 
      "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", 
@@ -35,7 +33,7 @@ def parse_args():
     parser.add_argument("--mask_threshold", type=int, default=10, help="Threshold for masking rare attributes.")
     parser.add_argument("--smoothing_sigma", type=float, default=1.0, help="Sigma value for Gaussian smoothing of weights.")
     parser.add_argument("--iqr_factor", type=float, default=1.5, help="Factor for IQR-based outlier limiting.")
-    parser.add_argument("--threads", type=int, default=cpu_count(), help="Number of threads to use.")
+    parser.add_argument("--threads", type=int, default=-1, help="Number of threads to use.")
     parser.add_argument("--sort_bam", action="store_true", help="Sort and merge output BAM file.")
     args = parser.parse_args()
     return args
@@ -44,27 +42,6 @@ def setup_logging():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger()
     return logger
-
-def count_attributes(bam_file, max_reads=50000000):
-    logger = setup_logging()
-    observed_attributes = defaultdict(int)
-    logger.info(f"Counting fragment attributes from BAM file, limited to {max_reads} reads ...")
-    read_count = 0
-
-    with pysam.AlignmentFile(bam_file, "rb") as bam:
-        for read in bam:
-            if read.is_proper_pair and not read.is_duplicate and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH and read.is_read1:
-                seq = read.query_sequence.upper()
-                length = abs(read.template_length)
-                end_motif = seq[:4]  # 5' end 4 bp motif
-                if 'N' not in end_motif:
-                    observed_attributes[(length, end_motif)] += 1
-                    read_count += 1
-                    if read_count >= max_reads:
-                        logger.info(f"Reached the limit of {max_reads} reads. Continuing ...")
-                        break
-
-    return observed_attributes
 
 def load_exclusion_bed(exclusion_bed_file):
     logger = setup_logging()
@@ -84,7 +61,19 @@ def is_excluded(chrom, start, end, excluded_regions):
             return True
     return False
 
-def simulate_fragment(ref_genome, fragment_lengths, excluded_regions, _):
+def count_attributes(bam_file):
+    observed_attributes = defaultdict(int)
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        for read in bam:
+            if read.is_proper_pair and not read.is_duplicate and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH and read.is_read1:
+                seq = read.query_sequence.upper()
+                length = abs(read.template_length)
+                end_motif = seq[:4]  # 5' end 4 bp motif
+                if 'N' not in end_motif:
+                    observed_attributes[(length, end_motif)] += 1
+    return observed_attributes
+
+def simulate_fragment(ref_genome, fragment_lengths, excluded_regions):
     while True:
         length = random.choice(fragment_lengths)
         chrom = random.choice(list(ref_genome.keys()))
@@ -99,16 +88,12 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions, _):
             return (length, end_motif)
 
 def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, threads):
-    logger = setup_logging()
-    logger.info(f"Simulating {num_simulations} expected attributes ... Splitting into {num_simulations // threads} per thread ...")
+    logger = logging.getLogger(__name__)
+    logger.info(f"Simulating {num_simulations} expected attributes ...")
 
-    simulations_per_thread = num_simulations // threads
-    pool = Pool(threads)
-    random_seeds = [random.randint(0, 999) for _ in range(threads)]
-    simulate_partial = partial(simulate_round, ref_genome, fragment_lengths, excluded_regions, simulations_per_thread)
-    results = pool.map(simulate_partial, random_seeds)
-    pool.close()
-    pool.join()
+    random_seeds = np.random.randint(0, 1000, size=threads)
+    simulate_partial = delayed(simulate_round)
+    results = Parallel(n_jobs=threads)(simulate_partial(ref_genome, fragment_lengths, excluded_regions, num_simulations // threads, seed) for seed in random_seeds)
 
     simulated_attributes = defaultdict(int)
     for result in results:
@@ -118,16 +103,15 @@ def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simu
     return simulated_attributes
 
 def simulate_round(ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed):
-    random.seed(random_seed)
+    np.random.seed(random_seed)
     simulated_attributes = defaultdict(int)
-    simulate_partial = partial(simulate_fragment, ref_genome, fragment_lengths, excluded_regions)
-    results = [simulate_partial(_) for _ in range(num_simulations)]
-    for length, end_motif in results:
-        simulated_attributes[(length, end_motif)] += 1
+    for _ in range(num_simulations):
+        attribute = simulate_fragment(ref_genome, fragment_lengths, excluded_regions)
+        simulated_attributes[attribute] += 1
     return simulated_attributes
 
 def mask_rare_attributes(observed, threshold=10):
-    logger = setup_logging()
+    logger = logging.getLogger(__name__)
     logger.info("Masking rare attributes ...")
     mask = {}
     for key, count in observed.items():
@@ -135,8 +119,6 @@ def mask_rare_attributes(observed, threshold=10):
     return mask
 
 def apply_mask(weights, mask):
-    logger = setup_logging()
-    logger.info("Applying binary mask ...")
     masked_weights = {}
     for key, weight in weights.items():
         if mask.get(key, False):
@@ -146,7 +128,7 @@ def apply_mask(weights, mask):
     return masked_weights
 
 def smooth_weights(weights, sigma=1.0):
-    logger = setup_logging()
+    logger = logging.getLogger(__name__)
     logger.info("Smoothing masked weights ...")
     keys = list(weights.keys())
     lengths = sorted(set(key[0] for key in keys))
@@ -172,7 +154,7 @@ def smooth_weights(weights, sigma=1.0):
     return smoothed_weights
 
 def limit_outliers(weights, factor=1.5):
-    logger = setup_logging()
+    logger = logging.getLogger(__name__)
     logger.info("Limiting outliers in weights outside 25-75% IQR ...")
     values = np.array(list(weights.values()))
     q1 = np.percentile(values, 25)
@@ -184,7 +166,7 @@ def limit_outliers(weights, factor=1.5):
     return limited_weights
 
 def compute_weights(observed, expected):
-    logger = setup_logging()
+    logger = logging.getLogger(__name__)
     weights = {}
     logger.info("Computing bias correction weights ...")
     for key in observed:
@@ -195,7 +177,7 @@ def compute_weights(observed, expected):
     return weights
 
 def apply_weights_to_chromosome(input_bam, weights, output_bam_prefix, chromosomes):
-    logger = setup_logging()
+    logger = logging.getLogger(__name__)
     logger.info(f"Applying weights to chromosomes {chromosomes} and writing to temporary BAM file ...")
     tmp_output_bam = f"{output_bam_prefix}_{chromosomes[0]}.bam"
     with pysam.AlignmentFile(input_bam, "rb") as bam, \
@@ -214,21 +196,10 @@ def apply_weights_to_chromosome(input_bam, weights, output_bam_prefix, chromosom
     return tmp_output_bam
 
 def load_reference_genome(reference_genome_file):
-    logger = setup_logging()
+    logger = logging.getLogger(__name__)
     logger.info("Loading reference genome ...")
     ref_genome = twobitreader.TwoBitFile(reference_genome_file)
     return ref_genome
-
-def write_to_tsv(data, output_file):
-    with open(output_file, 'w') as f:
-        for key, value in data.items():
-            length, motif = key
-            f.write(f"{length}\t{motif}\t{value}\n")
-
-def distribute_chromosomes(chromosomes, num_threads):
-    """Distribute chromosomes evenly across the available threads."""
-    for i in range(0, len(chromosomes), num_threads):
-        yield chromosomes[i:i + num_threads]
 
 def sort_bam(temp_bam):
     sorted_temp_file = f"{temp_bam}.sorted.bam"
@@ -241,8 +212,7 @@ def sort_and_merge_bams(temp_bam_files, output_bam, threads):
     logger.info(f"Sorting temporary BAM files ...")
 
     # Sort each temporary BAM file in parallel
-    with Pool(threads) as pool:
-        sorted_temp_files = pool.map(sort_bam, temp_bam_files)
+    sorted_temp_files = Parallel(n_jobs=threads)(delayed(sort_bam)(temp_bam) for temp_bam in temp_bam_files)
 
     # Merge sorted BAM files
     logger.info(f"Merging temporary BAM files into final BAM file ...")
@@ -252,9 +222,16 @@ def sort_and_merge_bams(temp_bam_files, output_bam, threads):
     for sorted_temp_file in sorted_temp_files:
         os.remove(sorted_temp_file)
 
+def write_to_tsv(data, output_file):
+    with open(output_file, 'w') as f:
+        for key, value in data.items():
+            length, motif = key
+            f.write(f"{length}\t{motif}\t{value}\n")
+
 def main():
     args = parse_args()
-    logger = setup_logging()
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
     logger.info(f"Starting end motif bias correction process for BAM {args.input_bam} ...")
 
     # Load reference genome
@@ -285,16 +262,11 @@ def main():
     # Limit outliers in weights
     limited_weights = limit_outliers(smoothed_weights, factor=args.iqr_factor)
 
-     # Distribute chromosomes across threads
+    # Apply weights to chromosomes
     bam_file = args.input_bam
     chromosomes = [chrom for chrom in pysam.AlignmentFile(bam_file).references if chrom in CHROMOSOMES_TO_PROCESS]
-    chromosome_groups = list(distribute_chromosomes(chromosomes, args.threads))
-
-    # Parallelize BAM tagging
-    temp_bam_files = []
-    with Pool(args.threads) as pool:
-        apply_partial = partial(apply_weights_to_chromosome, bam_file, limited_weights, args.output_bam)
-        temp_bam_files = pool.map(apply_partial, chromosome_groups)
+    chromosome_groups = np.array_split(chromosomes, args.threads)
+    temp_bam_files = Parallel(n_jobs=args.threads)(delayed(apply_weights_to_chromosome)(bam_file, limited_weights, args.output_bam, chromosome_group.tolist()) for chromosome_group in chromosome_groups)
 
     # Sort and merge temporary BAM files if --sort is specified
     if args.sort_bam:
