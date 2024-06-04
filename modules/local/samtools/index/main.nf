@@ -3,7 +3,7 @@ process SAMTOOLS_INDEX {
     label 'process_single'
 
     conda (params.enable_conda ? 'bioconda::samtools=1.20' : null)
-    container = 'ghcguzman/samtools1.20'
+    container = 'ghcguzman/samtools.amd64'
 
     input:
     tuple val(meta), path(bam)
