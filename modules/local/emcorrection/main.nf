@@ -2,7 +2,7 @@ process EMCORRECTION {
     tag "$meta.sample_id"
     label 'process_medium'
 
-    container = 'ghcguzman/emcorrection'
+    container = 'ghcguzman/emcorrection.amd64'
 
     input:
     tuple val(meta), path(bam), path(bai)
