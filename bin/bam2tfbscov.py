@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import logging
 from scipy.signal import savgol_filter
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import Pool
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,7 +19,7 @@ def parse_arguments():
     parser.add_argument("--max_fl", type=int, default=230, help="Maximum fragment length")
     parser.add_argument("--output", required=True, help="Output file for the normalized and smoothed matrix")
     parser.add_argument("--output_raw", required=True, help="Output file for the raw matrix")
-    parser.add_argument("--threads", type=int, default=4, help="Number of threads to use for parallel processing")
+    parser.add_argument("--threads", type=int, default=1, help="Number of threads to use for parallel processing")
     parser.add_argument("--range", type=int, default=1000, help="Range around center to consider for GC tag sums (+/-)")
     parser.add_argument("--sample_id", required=True, help="Sample ID for the output file")
     return parser.parse_args()
@@ -42,18 +42,11 @@ def get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range):
                 
     return gc_sums
 
-def process_interval(args):
-    bamfile_path, chrom, center, min_fl, max_fl, window_range = args
-    bamfile = pysam.AlignmentFile(bamfile_path, "rb")
-    gc_sums = get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range)
-    bamfile.close()
-    return gc_sums
-
 def calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl):
-    upstream_start = center - 3000
+    upstream_start = center - 1500
     upstream_end = center - 1500
     downstream_start = center + 1500
-    downstream_end = center + 3000
+    downstream_end = center + 1500
 
     upstream_gc_sum = 0
     downstream_gc_sum = 0
@@ -79,7 +72,7 @@ def calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl):
 
     return normalization_factor
 
-def process_bed_file(bed_file, args):
+def process_bed_file(args, bed_file):
     bed = pybedtools.BedTool(bed_file)
     base_name = bed_file.split('/')[-1].split('.')[0]
     bamfile_path = args.bam
@@ -90,23 +83,20 @@ def process_bed_file(bed_file, args):
     logging.info(f"Processing intervals for {bed_file} ...")
     intervals = [(bamfile_path, interval.chrom, (interval.start + interval.end) // 2, min_fl, max_fl, window_range) for interval in bed]
 
-    with ProcessPoolExecutor(max_workers=args.threads) as executor:
-        all_gc_sums = list(executor.map(process_interval, intervals))
-
+    bamfile = pysam.AlignmentFile(bamfile_path, "rb")
     normalized_gc_sums_list = []
     raw_gc_sums_list = []
 
-    logging.info(f"Calculating normalization factors for {bed_file} ...")
-    for interval, gc_sums in zip(intervals, all_gc_sums):
-        chrom = interval[1]
-        center = interval[2]
-        bamfile = pysam.AlignmentFile(bamfile_path, "rb")
+    for interval in intervals:
+        chrom, center = interval[1], interval[2]
+        gc_sums = get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range)
         normalization_factor = calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl)
-        bamfile.close()
 
         normalized_gc_sums = gc_sums / normalization_factor
         normalized_gc_sums_list.append(normalized_gc_sums)
         raw_gc_sums_list.append(gc_sums)
+
+    bamfile.close()
 
     # Remove bins with extremely high coverage (10 standard deviations above the mean)
     logging.info(f"Removing outlier bins for {bed_file} ...")
@@ -142,16 +132,11 @@ def main():
     results = []
     raw_results = []
 
-    with ProcessPoolExecutor(max_workers=len(args.beds)) as executor:
-        futures = {executor.submit(process_bed_file, bed_file, args): bed_file for bed_file in args.beds}
-        for future in as_completed(futures):
-            bed_file = futures[future]
-            try:
-                result, raw_result = future.result()
-                results.append(result)
-                raw_results.append(raw_result)
-            except Exception as e:
-                logging.error(f"Error processing {bed_file}: {e}")
+    with Pool(processes=args.threads) as pool:
+        process_args = [(args, bed_file) for bed_file in args.beds]
+        for result, raw_result in pool.starmap(process_bed_file, process_args):
+            results.append(result)
+            raw_results.append(raw_result)
 
     # Save the results to output files
     positions = np.arange(-window_range, window_range + 1)

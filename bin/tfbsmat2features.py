@@ -49,8 +49,8 @@ def calculate_features(df, plot_dir):
         logging.info(f"Calculated FFT amplitude for {sample_id}")
 
         # Global maxima and minima within +/- 250 bp regions
-        region_start = max(center_index - 150, 0)
-        region_end = min(center_index + 151, len(coverage))
+        region_start = max(center_index - 200, 0)
+        region_end = min(center_index + 201, len(coverage))
 
         right_region = coverage[center_index:region_end]
         left_region = coverage[region_start:center_index][::-1]
