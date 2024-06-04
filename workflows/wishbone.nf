@@ -90,7 +90,7 @@ workflow WISHBONE {
 
         ch_corrected_bams = SAMTOOLS_INDEX_TWO.out.bam_bai
     } else {
-        error "Something wierd happened. Cry and contact Carlos."
+        error "Something wierd happened. Definetely panic and contact Carlos."
     }
 
     //

@@ -1,6 +1,6 @@
 process EMCORRECTION {
     tag "$meta.sample_id"
-    label 'process_medium'
+    label 'process_highest'
 
     container = 'ghcguzman/emcorrection.amd64'
 
