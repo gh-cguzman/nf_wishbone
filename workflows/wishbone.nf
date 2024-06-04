@@ -91,7 +91,10 @@ workflow WISHBONE {
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
 
         ch_corrected_bams = SAMTOOLS_INDEX_TWO.out.bam_bai
-    } else {
+    } else if (!params.gc_correction && !params.em_correction) {
+        ch_corrected_bams = SAMTOOLS_INDEX_ONE.out.bam_bai
+    }
+      else {
         error "Something wierd happened. Definitely panic and contact Carlos."
     }
 
