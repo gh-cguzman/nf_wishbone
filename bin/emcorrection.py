@@ -7,7 +7,8 @@ import random
 import logging
 import twobitreader
 from scipy.ndimage import gaussian_filter
-from multiprocessing import Pool, cpu_count
+import multiprocessing
+from multiprocessing import Pool, Process, Pipe
 import os
 
 # Define constants
@@ -33,7 +34,7 @@ def parse_args():
     parser.add_argument("--mask_threshold", type=int, default=10, help="Threshold for masking rare attributes.")
     parser.add_argument("--smoothing_sigma", type=float, default=1.0, help="Sigma value for Gaussian smoothing of weights.")
     parser.add_argument("--iqr_factor", type=float, default=1.5, help="Factor for IQR-based outlier limiting.")
-    parser.add_argument("--threads", type=int, default=cpu_count(), help="Number of threads to use.")
+    parser.add_argument("--threads", type=int, default=1, help="Number of threads to use.")
     parser.add_argument("--sort_bam", action="store_true", help="Sort and merge output BAM file.")
     args = parser.parse_args()
     return args
@@ -89,28 +90,40 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions):
         if 'N' not in end_motif:
             return (length, end_motif)
 
-def worker_simulation(task_params):
-    ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed = task_params
+def worker_simulation(ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed, conn):
     random.seed(int(random_seed))
     simulated_attributes = Counter()
     for _ in range(num_simulations):
         attribute = simulate_fragment(ref_genome, fragment_lengths, excluded_regions)
         simulated_attributes[attribute] += 1
-    return simulated_attributes
+    conn.send(simulated_attributes)
+    conn.close()
 
 def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, threads):
     logger = logging.getLogger(__name__)
     logger.info(f"Simulating {num_simulations} expected attributes ...")
 
     random_seeds = np.random.randint(0, 1000, size=threads)
-    task_params = [(ref_genome, fragment_lengths, excluded_regions, num_simulations // threads, int(seed)) for seed in random_seeds]
+    processes = []
+    parent_conns = []
 
-    with Pool(threads) as pool:
-        results = pool.map(worker_simulation, task_params)
+    # Split work among processes
+    for seed in random_seeds:
+        parent_conn, child_conn = Pipe()
+        parent_conns.append(parent_conn)
+        p = Process(target=worker_simulation, args=(ref_genome, fragment_lengths, excluded_regions, num_simulations // threads, int(seed), child_conn))
+        processes.append(p)
+        p.start()
 
+    # Collect results from worker processes
     simulated_attributes = Counter()
-    for result in results:
+    for parent_conn in parent_conns:
+        result = parent_conn.recv()
         simulated_attributes.update(result)
+
+    # Ensure all processes have finished
+    for p in processes:
+        p.join()
 
     return simulated_attributes
 
@@ -161,11 +174,11 @@ def compute_weights(observed, expected):
     logger.info("Computing bias correction weights ...")
     return {key: expected.get(key, 1.0) / observed[key] if expected.get(key, 0) > 0 else 1.0 for key in observed}
 
-def apply_weights_to_chromosome(input_bam, weights, output_bam_prefix, chromosome, threads):
+def apply_weights_to_chromosome_worker(bam_file, weights, chromosome, threads, conn):
     logger = logging.getLogger(__name__)
     logger.info(f"Applying weights to chromosome {chromosome} and writing to temporary BAM file ...")
-    tmp_output_bam = f"{output_bam_prefix}_{chromosome}.bam"
-    with pysam.AlignmentFile(input_bam, "rb", threads=threads) as bam, \
+    tmp_output_bam = f"{os.path.splitext(bam_file)[0]}_{chromosome}.bam"
+    with pysam.AlignmentFile(bam_file, "rb", threads=threads) as bam, \
          pysam.AlignmentFile(tmp_output_bam, "wb", header=bam.header) as out_bam:
         for read in bam.fetch(chromosome):
             if read.is_proper_pair and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH:
@@ -176,7 +189,35 @@ def apply_weights_to_chromosome(input_bam, weights, output_bam_prefix, chromosom
                     weight = weights.get((length, end_motif), 1.0)
                     read.set_tag("EM", weight)  # Adding weight as a custom tag
                     out_bam.write(read)
-    return tmp_output_bam
+    conn.send(tmp_output_bam)
+    conn.close()
+
+def apply_weights_to_chromosomes(bam_file, weights, output_bam_prefix, chromosomes, threads):
+    logger = logging.getLogger(__name__)
+    logger.info(f"Applying weights to chromosomes in parallel ...")
+
+    processes = []
+    parent_conns = []
+
+    # Split work among processes
+    for chromosome in chromosomes:
+        parent_conn, child_conn = Pipe()
+        parent_conns.append(parent_conn)
+        p = Process(target=apply_weights_to_chromosome_worker, args=(bam_file, weights, chromosome, threads, child_conn))
+        processes.append(p)
+        p.start()
+
+    # Collect results from worker processes
+    temp_bam_files = []
+    for parent_conn in parent_conns:
+        result = parent_conn.recv()
+        temp_bam_files.append(result)
+
+    # Ensure all processes have finished
+    for p in processes:
+        p.join()
+
+    return temp_bam_files
 
 def load_reference_genome(reference_genome_file):
     logger = logging.getLogger(__name__)
@@ -251,8 +292,7 @@ def main():
     chromosomes = [chrom for chrom in pysam.AlignmentFile(bam_file).references if chrom in CHROMOSOMES_TO_PROCESS]
 
     # Process each chromosome in parallel
-    with Pool(args.threads) as pool:
-        temp_bam_files = pool.starmap(apply_weights_to_chromosome, [(bam_file, limited_weights, args.output_bam, chrom, args.threads) for chrom in chromosomes])
+    temp_bam_files = apply_weights_to_chromosomes(bam_file, limited_weights, args.output_bam, chromosomes, args.threads)
 
     # Sort and merge temporary BAM files if --sort is specified
     if args.sort_bam:
