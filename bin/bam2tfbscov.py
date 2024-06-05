@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import logging
 from scipy.signal import savgol_filter
-from multiprocessing import Pool
+from multiprocessing import Pool, cpu_count
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,7 +19,7 @@ def parse_arguments():
     parser.add_argument("--max_fl", type=int, default=230, help="Maximum fragment length")
     parser.add_argument("--output", required=True, help="Output file for the normalized and smoothed matrix")
     parser.add_argument("--output_raw", required=True, help="Output file for the raw matrix")
-    parser.add_argument("--threads", type=int, default=1, help="Number of threads to use for parallel processing")
+    parser.add_argument("--threads", type=int, default=cpu_count(), help="Number of threads to use for parallel processing")
     parser.add_argument("--range", type=int, default=1000, help="Range around center to consider for GC tag sums (+/-)")
     parser.add_argument("--sample_id", required=True, help="Sample ID for the output file")
     return parser.parse_args()
@@ -75,20 +75,19 @@ def calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl):
 def process_bed_file(args, bed_file):
     bed = pybedtools.BedTool(bed_file)
     base_name = bed_file.split('/')[-1].split('.')[0]
-    bamfile_path = args.bam
     min_fl = args.min_fl
     max_fl = args.max_fl
     window_range = args.range
 
-    logging.info(f"Processing intervals for {bed_file} ...")
-    intervals = [(bamfile_path, interval.chrom, (interval.start + interval.end) // 2, min_fl, max_fl, window_range) for interval in bed]
+    bamfile = pysam.AlignmentFile(args.bam, "rb")
 
-    bamfile = pysam.AlignmentFile(bamfile_path, "rb")
+    logging.info(f"Processing intervals for {bed_file} ...")
+    intervals = [(interval.chrom, (interval.start + interval.end) // 2) for interval in bed]
+
     normalized_gc_sums_list = []
     raw_gc_sums_list = []
 
-    for interval in intervals:
-        chrom, center = interval[1], interval[2]
+    for chrom, center in intervals:
         gc_sums = get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range)
         normalization_factor = calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl)
 
@@ -121,22 +120,25 @@ def process_bed_file(args, bed_file):
 
     return output_row, raw_output_row
 
+def process_bed_files_in_parallel(args, bed_files):
+    with Pool(args.threads) as pool:
+        results = pool.starmap(process_bed_file, [(args, bed_file) for bed_file in bed_files])
+    return results
+
 def main():
     args = parse_arguments()
-
-    logging.info(f"Loading BAM {args.bam.split('/')[-1]} file ...")
-    bamfile = pysam.AlignmentFile(args.bam, "rb")
-    bamfile.close()
 
     window_range = args.range
     results = []
     raw_results = []
 
-    with Pool(processes=args.threads) as pool:
-        process_args = [(args, bed_file) for bed_file in args.beds]
-        for result, raw_result in pool.starmap(process_bed_file, process_args):
-            results.append(result)
-            raw_results.append(raw_result)
+    logging.info("Processing BED files in parallel...")
+    parallel_results = process_bed_files_in_parallel(args, args.beds)
+
+    logging.info("Staging results ...")
+    for result_pair in parallel_results:
+        results.append(result_pair[0])
+        raw_results.append(result_pair[1])
 
     # Save the results to output files
     positions = np.arange(-window_range, window_range + 1)

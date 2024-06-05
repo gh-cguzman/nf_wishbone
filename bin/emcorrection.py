@@ -62,6 +62,8 @@ def is_excluded(chrom, start, end, excluded_regions):
     return False
 
 def count_attributes(bam_file):
+    logger = logging.getLogger(__name__)
+    logger.info(f"Counting observed attributes from file: {bam_file} ...")
     observed_attributes = defaultdict(int)
     with pysam.AlignmentFile(bam_file, "rb") as bam:
         for read in bam:
