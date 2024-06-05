@@ -27,12 +27,11 @@ def parse_args():
     parser.add_argument("-e", "--exclusion_bed", required=True, help="Exclusion BED file.")
     parser.add_argument("-o", "--output_bam", required=True, help="Output tagged BAM file.")
     parser.add_argument("-n", "--num_simulations", type=int, default=200000000, help="Number of simulations for expected attributes.")
-    parser.add_argument("--simulation_rounds", type=int, default=4, help="Number of simulation rounds.")
     parser.add_argument("--output_observed", action='store_true', help="Output TSV file for observed counts.")
     parser.add_argument("--output_expected", action='store_true', help="Output TSV file for expected counts.")
     parser.add_argument("--output_freq", action='store_true', help="Output TSV file for frequency weights.")
     parser.add_argument("--mask_threshold", type=int, default=10, help="Threshold for masking rare attributes.")
-    parser.add_argument("--smoothing_sigma", type=float, default=1.0, help="Sigma value for Gaussian smoothing of weights.")
+    parser.add_argument("--smoothing_sigma", type=float, default=2.0, help="Sigma value for Gaussian smoothing of weights.")
     parser.add_argument("--iqr_factor", type=float, default=1.5, help="Factor for IQR-based outlier limiting.")
     parser.add_argument("--threads", type=int, default=1, help="Number of threads to use.")
     parser.add_argument("--sort_bam", action="store_true", help="Sort and merge output BAM file.")
@@ -76,6 +75,15 @@ def count_attributes(bam_file, threads):
                     observed_attributes[(length, end_motif)] += 1
     return observed_attributes
 
+def load_reference_genome(reference_genome_file):
+    logger = logging.getLogger(__name__)
+    logger.info("Loading reference genome ...")
+    ref_genome = twobitreader.TwoBitFile(reference_genome_file)
+    return ref_genome
+
+def get_fragment(ref_genome, chrom, start_pos, end_pos):
+    return ref_genome[chrom][start_pos:end_pos].upper()
+
 def simulate_fragment(ref_genome, fragment_lengths, excluded_regions):
     while True:
         length = random.choice(fragment_lengths)
@@ -85,21 +93,22 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions):
         end_pos = start_pos + length
         if is_excluded(chrom, start_pos, end_pos, excluded_regions):
             continue
-        fragment = ref_genome[chrom][start_pos:end_pos].upper()
+        fragment = get_fragment(ref_genome, chrom, start_pos, end_pos)
         end_motif = fragment[:4]
         if 'N' not in end_motif:
             return (length, end_motif)
 
-def worker_simulation(ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed, conn):
+def worker_simulation(ref_genome_data, fragment_lengths, excluded_regions, num_simulations, random_seed, conn):
     random.seed(int(random_seed))
     simulated_attributes = Counter()
+    ref_genome = twobitreader.TwoBitFile(ref_genome_data)
     for _ in range(num_simulations):
         attribute = simulate_fragment(ref_genome, fragment_lengths, excluded_regions)
         simulated_attributes[attribute] += 1
     conn.send(simulated_attributes)
     conn.close()
 
-def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simulations, threads):
+def simulate_attributes(ref_genome_file, fragment_lengths, excluded_regions, num_simulations, threads):
     logger = logging.getLogger(__name__)
     logger.info(f"Simulating {num_simulations} expected attributes ...")
 
@@ -107,11 +116,14 @@ def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simu
     processes = []
     parent_conns = []
 
+    # Load reference genome once in the main process
+    ref_genome_data = ref_genome_file
+
     # Split work among processes
     for seed in random_seeds:
         parent_conn, child_conn = Pipe()
         parent_conns.append(parent_conn)
-        p = Process(target=worker_simulation, args=(ref_genome, fragment_lengths, excluded_regions, num_simulations // threads, int(seed), child_conn))
+        p = Process(target=worker_simulation, args=(ref_genome_data, fragment_lengths, excluded_regions, num_simulations // threads, int(seed), child_conn))
         processes.append(p)
         p.start()
 
@@ -219,12 +231,6 @@ def apply_weights_to_chromosomes(bam_file, weights, output_bam_prefix, chromosom
 
     return temp_bam_files
 
-def load_reference_genome(reference_genome_file):
-    logger = logging.getLogger(__name__)
-    logger.info("Loading reference genome ...")
-    ref_genome = twobitreader.TwoBitFile(reference_genome_file)
-    return ref_genome
-
 def sort_bam(temp_bam, threads):
     sorted_temp_file = f"{temp_bam}.sorted.bam"
     pysam.sort("-o", sorted_temp_file, temp_bam, threads=threads)
@@ -259,9 +265,6 @@ def main():
     logger = logging.getLogger(__name__)
     logger.info(f"Starting end motif bias correction process for BAM {args.input_bam} ...")
 
-    # Load reference genome
-    ref_genome = load_reference_genome(args.reference_genome)
-
     # Load exclusion regions
     excluded_regions = load_exclusion_bed(args.exclusion_bed)
 
@@ -272,7 +275,7 @@ def main():
     fragment_lengths = [length for length, motif in observed_attributes.keys()]
 
     # Simulate expected attributes
-    expected_attributes = simulate_attributes(ref_genome, fragment_lengths, excluded_regions, args.num_simulations, args.threads)
+    expected_attributes = simulate_attributes(args.reference_genome, fragment_lengths, excluded_regions, args.num_simulations, args.threads)
 
     # Compute bias correction weights
     weights = compute_weights(observed_attributes, expected_attributes)
