@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import argparse
 import pysam
 import numpy as np
@@ -89,8 +88,9 @@ def simulate_fragment(ref_genome, fragment_lengths, excluded_regions):
         if 'N' not in end_motif:
             return (length, end_motif)
 
-def simulate_round(ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed):
-    random.seed(random_seed)
+def worker_simulation(task_params):
+    ref_genome, fragment_lengths, excluded_regions, num_simulations, random_seed = task_params
+    random.seed(int(random_seed))
     simulated_attributes = Counter()
     for _ in range(num_simulations):
         attribute = simulate_fragment(ref_genome, fragment_lengths, excluded_regions)
@@ -102,8 +102,10 @@ def simulate_attributes(ref_genome, fragment_lengths, excluded_regions, num_simu
     logger.info(f"Simulating {num_simulations} expected attributes ...")
 
     random_seeds = np.random.randint(0, 1000, size=threads)
+    task_params = [(ref_genome, fragment_lengths, excluded_regions, num_simulations // threads, int(seed)) for seed in random_seeds]
+
     with Pool(threads) as pool:
-        results = pool.starmap(simulate_round, [(ref_genome, fragment_lengths, excluded_regions, num_simulations // threads, int(seed)) for seed in random_seeds])
+        results = pool.map(worker_simulation, task_params)
 
     simulated_attributes = Counter()
     for result in results:

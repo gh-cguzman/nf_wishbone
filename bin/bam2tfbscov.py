@@ -7,6 +7,8 @@ import pandas as pd
 import logging
 from scipy.signal import savgol_filter
 from multiprocessing import Pool, cpu_count
+from functools import partial
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -39,13 +41,13 @@ def get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range):
             gc_pos = read.reference_start - start
             if 0 <= gc_pos < len(gc_sums):
                 gc_sums[gc_pos] += read.get_tag("GC")
-                
+
     return gc_sums
 
 def calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl):
     upstream_start = center - 1500
-    upstream_end = center - 1500
-    downstream_start = center + 1500
+    upstream_end = center
+    downstream_start = center
     downstream_end = center + 1500
 
     upstream_gc_sum = 0
@@ -59,22 +61,22 @@ def calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl):
             continue
         if min_fl <= read.template_length <= max_fl:
             upstream_gc_sum += read.get_tag("GC")
-    
+
     for read in bamfile.fetch(chrom, downstream_start, downstream_end):
         if not read.is_proper_pair or read.is_unmapped or read.mapping_quality == 0 or read.is_supplementary:
             continue
         if min_fl <= read.template_length <= max_fl:
             downstream_gc_sum += read.get_tag("GC")
 
-    normalization_factor = (upstream_gc_sum + downstream_gc_sum) / (3000 * 2)
+    normalization_factor = (upstream_gc_sum + downstream_gc_sum) / 3000
     if normalization_factor == 0:
         normalization_factor = 1  # Avoid division by zero
 
     return normalization_factor
 
-def process_bed_file(args, bed_file):
+def process_bed_file(bed_file, args):
     bed = pybedtools.BedTool(bed_file)
-    base_name = bed_file.split('/')[-1].split('.')[0]
+    base_name = os.path.basename(bed_file).split('.')[0]
     min_fl = args.min_fl
     max_fl = args.max_fl
     window_range = args.range
@@ -84,25 +86,24 @@ def process_bed_file(args, bed_file):
     logging.info(f"Processing intervals for {bed_file} ...")
     intervals = [(interval.chrom, (interval.start + interval.end) // 2) for interval in bed]
 
-    normalized_gc_sums_list = []
-    raw_gc_sums_list = []
+    normalized_gc_sums_list = np.zeros((len(intervals), window_range * 2 + 1))
+    raw_gc_sums_list = np.zeros((len(intervals), window_range * 2 + 1))
 
-    for chrom, center in intervals:
+    for i, (chrom, center) in enumerate(intervals):
         gc_sums = get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range)
         normalization_factor = calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl)
 
         normalized_gc_sums = gc_sums / normalization_factor
-        normalized_gc_sums_list.append(normalized_gc_sums)
-        raw_gc_sums_list.append(gc_sums)
+        normalized_gc_sums_list[i] = normalized_gc_sums
+        raw_gc_sums_list[i] = gc_sums
 
     bamfile.close()
 
     # Remove bins with extremely high coverage (10 standard deviations above the mean)
     logging.info(f"Removing outlier bins for {bed_file} ...")
-    normalized_gc_sums_array = np.array(normalized_gc_sums_list)
-    mean_coverage = np.mean(normalized_gc_sums_array, axis=0)
-    std_coverage = np.std(normalized_gc_sums_array, axis=0)
-    filtered_gc_sums = np.array([gc_sums for gc_sums in normalized_gc_sums_array if not np.any(gc_sums > mean_coverage + 10 * std_coverage)])
+    mean_coverage = np.mean(normalized_gc_sums_list, axis=0)
+    std_coverage = np.std(normalized_gc_sums_list, axis=0)
+    filtered_gc_sums = normalized_gc_sums_list[np.all(normalized_gc_sums_list <= mean_coverage + 10 * std_coverage, axis=1)]
 
     mean_gc_sums = np.mean(filtered_gc_sums, axis=0)
 
@@ -121,8 +122,10 @@ def process_bed_file(args, bed_file):
     return output_row, raw_output_row
 
 def process_bed_files_in_parallel(args, bed_files):
+    process_func = partial(process_bed_file, args=args)
+    chunksize = max(1, len(bed_files) // (2 * args.threads))  # Dynamic chunksize calculation
     with Pool(args.threads) as pool:
-        results = pool.starmap(process_bed_file, [(args, bed_file) for bed_file in bed_files])
+        results = list(pool.imap(process_func, bed_files, chunksize=chunksize))
     return results
 
 def main():
