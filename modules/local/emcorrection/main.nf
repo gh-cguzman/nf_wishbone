@@ -20,10 +20,13 @@ process EMCORRECTION {
     """
     emcorrection.py \\
     -i $bam \\
-    -r $genome \\
-    -e $blacklist \\
-    -o ${bam.baseName}.EMtagged.bam \\
-    --threads $task.cpus \\
-    --sort_bam
+    -t $genome \\
+    -b $blacklist \\
+    -obam ${bam.baseName}.EMtagged.bam \\
+    -n $task.cpus \\
+    -cw ${bam.baseName}.EMtagged.em.weights.tsv \\
+    -fcw ${bam.baseName}.EMtagged.fl.weights.tsv \\
+    -cm simple \\
+    -l ${bam.baseName}.EMtagged.log
     """
 }
