@@ -6,8 +6,7 @@ import numpy as np
 import pandas as pd
 import logging
 from scipy.signal import savgol_filter
-from multiprocessing import Pool, cpu_count
-from functools import partial
+from joblib import Parallel, delayed
 import os
 
 # Set up logging
@@ -21,7 +20,7 @@ def parse_arguments():
     parser.add_argument("--max_fl", type=int, default=230, help="Maximum fragment length")
     parser.add_argument("--output", required=True, help="Output file for the normalized and smoothed matrix")
     parser.add_argument("--output_raw", required=True, help="Output file for the raw matrix")
-    parser.add_argument("--threads", type=int, default=cpu_count(), help="Number of threads to use for parallel processing")
+    parser.add_argument("--threads", type=int, default=os.cpu_count(), help="Number of threads to use for parallel processing")
     parser.add_argument("--range", type=int, default=1000, help="Range around center to consider for GC tag sums (+/-)")
     parser.add_argument("--sample_id", required=True, help="Sample ID for the output file")
     return parser.parse_args()
@@ -122,10 +121,7 @@ def process_bed_file(bed_file, args):
     return output_row, raw_output_row
 
 def process_bed_files_in_parallel(args, bed_files):
-    process_func = partial(process_bed_file, args=args)
-    chunksize = max(1, len(bed_files) // (2 * args.threads))  # Dynamic chunksize calculation
-    with Pool(args.threads) as pool:
-        results = list(pool.imap(process_func, bed_files, chunksize=chunksize))
+    results = Parallel(n_jobs=args.threads)(delayed(process_bed_file)(bed_file, args) for bed_file in bed_files)
     return results
 
 def main():

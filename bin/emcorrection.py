@@ -1,315 +1,541 @@
-#!/usr/bin/env python
-import argparse
+
+from functools import partial
+import collections
+
+# Replacing lambda functions with partial
+weights = collections.defaultdict(partial(collections.defaultdict, float))
+smoothed_weights = collections.defaultdict(partial(collections.defaultdict, float))
 import pysam
-import numpy as np
-from collections import defaultdict, Counter
-import random
-import logging
-import twobitreader
-from scipy.ndimage import gaussian_filter
 import multiprocessing
-from multiprocessing import Pool, Process, Pipe
+from functools import partial
+import argparse
+from collections import defaultdict
+import logging
+import py2bit
+import random
+from intervaltree import Interval, IntervalTree
+import pandas as pd
+import numpy as np
+from statsmodels.api import GLM, families
+from scipy.ndimage import gaussian_filter
+import dill as pickle
 import os
+import shutil
 
-# Define constants
-MIN_FRAGMENT_LENGTH = 50
-MAX_FRAGMENT_LENGTH = 550
-CHROMOSOMES_TO_PROCESS = set(
-    ["chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9",
-     "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17",
-     "chr18", "chr19", "chr20", "chr21", "chr22"]
-)
+rc = {'A': 'T', 'T': 'A', 'C': 'G', 'G': 'C', 'N': 'N'}
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Correct end motif bias using 5' end motifs.")
-    parser.add_argument("-i", "--input_bam", required=True, help="Input BAM file.")
-    parser.add_argument("-r", "--reference_genome", required=True, help="Reference genome file in 2bit format.")
-    parser.add_argument("-e", "--exclusion_bed", required=True, help="Exclusion BED file.")
-    parser.add_argument("-o", "--output_bam", required=True, help="Output tagged BAM file.")
-    parser.add_argument("-n", "--num_simulations", type=int, default=200000000, help="Number of simulations for expected attributes.")
-    parser.add_argument("--output_observed", action='store_true', help="Output TSV file for observed counts.")
-    parser.add_argument("--output_expected", action='store_true', help="Output TSV file for expected counts.")
-    parser.add_argument("--output_freq", action='store_true', help="Output TSV file for frequency weights.")
-    parser.add_argument("--mask_threshold", type=int, default=10, help="Threshold for masking rare attributes.")
-    parser.add_argument("--smoothing_sigma", type=float, default=2.0, help="Sigma value for Gaussian smoothing of weights.")
-    parser.add_argument("--iqr_factor", type=float, default=1.5, help="Factor for IQR-based outlier limiting.")
-    parser.add_argument("--threads", type=int, default=1, help="Number of threads to use.")
-    parser.add_argument("--sort_bam", action="store_true", help="Sort and merge output BAM file.")
-    args = parser.parse_args()
-    return args
+def defaultdict_int():
+    return defaultdict(int)
 
-def setup_logging():
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger()
-    return logger
+def process_read(read, fragment_min, fragment_max):
+    if (read.is_read1 and
+        read.is_proper_pair and
+        not read.is_duplicate and
+        fragment_min <= read.template_length <= fragment_max and
+        read.reference_name in [f'chr{i}' for i in range(1, 23)]):
+        
+        fragment_length = read.template_length
+        seq = read.query_sequence
+        end_motif = None  # Initialize the end_motif variable
+        
+        if read.flag in (99, 163):
+            end_motif = seq[:4]
+        elif read.flag in (83, 147):
+            end_motif = ''.join(rc[base] for base in reversed(seq[-4:]))
 
-def load_exclusion_bed(exclusion_bed_file):
-    logger = setup_logging()
-    logger.info("Loading exclusion BED file ...")
-    excluded_regions = defaultdict(list)
-    with open(exclusion_bed_file, "r") as bed:
-        for line in bed:
-            chrom, start, end = line.strip().split()[:3]
-            excluded_regions[chrom].append((int(start), int(end)))
-    return excluded_regions
+        if end_motif and 'N' not in end_motif:
+            return (fragment_length, end_motif)
+    
+    return None
 
-def is_excluded(chrom, start, end, excluded_regions):
-    if chrom not in excluded_regions:
-        return False
-    for region_start, region_end in excluded_regions[chrom]:
-        if start < region_end and end > region_start:
-            return True
-    return False
+def process_chromosome(chromosome, bam_file, fragment_min, fragment_max, queue):
+    bam = pysam.AlignmentFile(bam_file, "rb")
+    results = defaultdict(defaultdict_int)
+    fragment_length_counts = defaultdict_int()
+    
+    for read in bam.fetch(chromosome):
+        result = process_read(read, fragment_min, fragment_max)
+        if result:
+            fragment_length, end_motif = result
+            results[fragment_length][end_motif] += 1
+            fragment_length_counts[fragment_length] += 1
+    
+    queue.put((results, fragment_length_counts))
 
-def count_attributes(bam_file, threads):
-    logger = logging.getLogger(__name__)
-    logger.info(f"Counting observed attributes from file: {bam_file} ...")
-    observed_attributes = Counter()
-    with pysam.AlignmentFile(bam_file, "rb", threads=threads) as bam:
-        for read in bam:
-            if read.is_proper_pair and not read.is_duplicate and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH and read.is_read1:
-                seq = read.query_sequence.upper()
-                length = abs(read.template_length)
-                end_motif = seq[:4]  # 5' end 4 bp motif
-                if 'N' not in end_motif:
-                    observed_attributes[(length, end_motif)] += 1
-    return observed_attributes
+def merge_results(results_list):
+    merged = defaultdict(defaultdict_int)
+    for results in results_list:
+        for fragment_length, motifs in results.items():
+            for motif, count in motifs.items():
+                merged[fragment_length][motif] += count
+    return merged
 
-def load_reference_genome(reference_genome_file):
-    logger = logging.getLogger(__name__)
-    logger.info("Loading reference genome ...")
-    ref_genome = twobitreader.TwoBitFile(reference_genome_file)
-    return ref_genome
+def merge_counts(counts_list):
+    merged = defaultdict_int()
+    for counts in counts_list:
+        for fragment_length, number in counts.items():
+            merged[fragment_length] += number
+    return merged
 
-def get_fragment(ref_genome, chrom, start_pos, end_pos):
-    return ref_genome[chrom][start_pos:end_pos].upper()
-
-def simulate_fragment(ref_genome, fragment_lengths, excluded_regions):
-    while True:
-        length = random.choice(fragment_lengths)
-        chrom = random.choice(list(ref_genome.keys()))
-        chrom_len = len(ref_genome[chrom])
-        start_pos = random.randint(0, chrom_len - length)
-        end_pos = start_pos + length
-        if is_excluded(chrom, start_pos, end_pos, excluded_regions):
-            continue
-        fragment = get_fragment(ref_genome, chrom, start_pos, end_pos)
-        end_motif = fragment[:4]
-        if 'N' not in end_motif:
-            return (length, end_motif)
-
-def worker_simulation(ref_genome_data, fragment_lengths, excluded_regions, num_simulations, random_seed, conn):
-    random.seed(int(random_seed))
-    simulated_attributes = Counter()
-    ref_genome = twobitreader.TwoBitFile(ref_genome_data)
-    for _ in range(num_simulations):
-        attribute = simulate_fragment(ref_genome, fragment_lengths, excluded_regions)
-        simulated_attributes[attribute] += 1
-    conn.send(simulated_attributes)
-    conn.close()
-
-def simulate_attributes(ref_genome_file, fragment_lengths, excluded_regions, num_simulations, threads):
-    logger = logging.getLogger(__name__)
-    logger.info(f"Simulating {num_simulations} expected attributes ...")
-
-    random_seeds = np.random.randint(0, 1000, size=threads)
+def parallel_process_bam(bam_file, chromosomes, fragment_min, fragment_max, num_cores):
     processes = []
-    parent_conns = []
+    queue = multiprocessing.Queue()
 
-    # Load reference genome once in the main process
-    ref_genome_data = ref_genome_file
+    for chrom in chromosomes:
+        process = multiprocessing.Process(target=process_chromosome, args=(chrom, bam_file, fragment_min, fragment_max, queue))
+        processes.append(process)
+    
+    for process in processes:
+        process.start()
+    
+    results_list = []
+    fragment_length_counts_list = []
+    for _ in chromosomes:
+        results, fragment_length_counts = queue.get()
+        results_list.append(results)
+        fragment_length_counts_list.append(fragment_length_counts)
+    
+    for process in processes:
+        process.join()
 
-    # Split work among processes
-    for seed in random_seeds:
-        parent_conn, child_conn = Pipe()
-        parent_conns.append(parent_conn)
-        p = Process(target=worker_simulation, args=(ref_genome_data, fragment_lengths, excluded_regions, num_simulations // threads, int(seed), child_conn))
-        processes.append(p)
-        p.start()
+    motif_results = merge_results(results_list)
+    fragment_length_counts = merge_counts(fragment_length_counts_list)
+    
+    return motif_results, fragment_length_counts
 
-    # Collect results from worker processes
-    simulated_attributes = Counter()
-    for parent_conn in parent_conns:
-        result = parent_conn.recv()
-        simulated_attributes.update(result)
+def compute_allowed_intervals(chr_length, blacklist_tree):
+    allowed_intervals = []
+    start = 0
+    for interval in sorted(blacklist_tree):
+        if start < interval.begin:
+            allowed_intervals.append((start, interval.begin))
+        start = interval.end
+    if start < chr_length:
+        allowed_intervals.append((start, chr_length))
+    return allowed_intervals
 
-    # Ensure all processes have finished
-    for p in processes:
-        p.join()
+def sample_from_allowed_intervals(allowed_intervals, fragment_length):
+    while True:
+        interval = random.choice(allowed_intervals)
+        if interval[1] - interval[0] >= fragment_length:  # Ensure the interval is large enough
+            start = random.randint(interval[0], interval[1] - fragment_length)
+            if start + fragment_length <= interval[1]:
+                return start
 
-    return simulated_attributes
+def simulate_motifs(chromosome, twobit_file, fragment_min, fragment_max, num_simulations, allowed_intervals, queue):
+    twobit = py2bit.open(twobit_file)
+    results = defaultdict(defaultdict_int)
+    fragment_length_counts = defaultdict_int()
+    chr_length = twobit.chroms(chromosome)
 
-def mask_rare_attributes(observed, threshold=10):
-    logger = logging.getLogger(__name__)
-    logger.info("Masking rare attributes ...")
-    mask = {key: count >= threshold for key, count in observed.items()}
-    return mask
+    for _ in range(num_simulations):
+        fragment_length = random.randint(fragment_min, fragment_max)
+        start = sample_from_allowed_intervals(allowed_intervals, fragment_length)
 
-def apply_mask(weights, mask):
-    return {key: weight if mask.get(key, False) else 1.0 for key, weight in weights.items()}
+        sequence = twobit.sequence(chromosome, start, start + 4)
+        
+        if 'N' not in sequence:
+            results[fragment_length][sequence] += 1
+            fragment_length_counts[fragment_length] += 1
 
-def smooth_weights(weights, sigma=1.0):
-    logger = logging.getLogger(__name__)
-    logger.info("Smoothing masked weights ...")
-    keys = list(weights.keys())
-    lengths = sorted(set(key[0] for key in keys))
-    motifs = sorted(set(key[1] for key in keys))
-    weight_matrix = np.zeros((len(lengths), len(motifs)))
+    twobit.close()
+    
+    queue.put((results, fragment_length_counts))
 
-    length_index = {length: i for i, length in enumerate(lengths)}
-    motif_index = {motif: i for i, motif in enumerate(motifs)}
+def parallel_simulate_motifs(twobit_file, chromosomes, fragment_min, fragment_max, num_simulations, num_cores, allowed_intervals_dict):
+    processes = []
+    queue = multiprocessing.Queue()
+    
+    for chrom in chromosomes:
+        process = multiprocessing.Process(target=simulate_motifs, args=(chrom, twobit_file, fragment_min, fragment_max, num_simulations // len(chromosomes), allowed_intervals_dict[chrom], queue))
+        processes.append(process)
+    
+    for process in processes:
+        process.start()
+    
+    results_list = []
+    fragment_length_counts_list = []
+    for _ in chromosomes:
+        results, fragment_length_counts = queue.get()
+        results_list.append(results)
+        fragment_length_counts_list.append(fragment_length_counts)
+    
+    for process in processes:
+        process.join()
 
-    for (length, motif), weight in weights.items():
-        i = length_index[length]
-        j = motif_index[motif]
-        weight_matrix[i, j] = weight
+    motif_results = merge_results(results_list)
+    fragment_length_counts = merge_counts(fragment_length_counts_list)
 
+    return motif_results, fragment_length_counts
+
+def load_blacklist(bed_file):
+    blacklist_trees = defaultdict(IntervalTree)
+    with open(bed_file, 'r') as f:
+        for line in f:
+            if line.strip():
+                parts = line.strip().split()
+                chrom, start, end = parts[0], int(parts[1]), int(parts[2])
+                blacklist_trees[chrom].add(Interval(start, end))
+    return blacklist_trees
+
+def precompute_allowed_intervals(chromosomes, twobit_file, blacklist_trees):
+    allowed_intervals_dict = {}
+    twobit = py2bit.open(twobit_file)
+    for chrom in chromosomes:
+        chr_length = twobit.chroms(chrom)
+        blacklist_tree = blacklist_trees.get(chrom, IntervalTree())
+        allowed_intervals_dict[chrom] = compute_allowed_intervals(chr_length, blacklist_tree)
+    twobit.close()
+    return allowed_intervals_dict
+
+def calculate_simple_weights(observed, expected):
+    weights = collections.defaultdict(partial(collections.defaultdict, float))
+    for frag_length in observed:
+        for motif in observed[frag_length]:
+            obs_count = observed[frag_length][motif]
+            exp_count = expected[frag_length].get(motif, 0)
+            if obs_count <= 20 or exp_count <= 20:
+                weights[frag_length][motif] = 1
+            else:
+                weights[frag_length][motif] = exp_count / obs_count
+    return weights
+
+def calculate_simple_fragment_weights(observed, expected):
+    weights = defaultdict(float)
+    for frag_length in observed:
+        obs_count = observed[frag_length]
+        exp_count = expected.get(frag_length, 0)
+        if obs_count <= 20 or exp_count <= 20:
+            weights[frag_length] = 1
+        else:
+            weights[frag_length] = exp_count / obs_count
+    return weights
+
+def calculate_glm_weights(observed, expected):
+    weights = collections.defaultdict(partial(collections.defaultdict, float))
+    for frag_length in observed:
+        data = []
+        for motif in observed[frag_length]:
+            obs_count = observed[frag_length][motif]
+            exp_count = expected[frag_length].get(motif, 0)
+            if obs_count > 0 and exp_count > 0:
+                data.append((obs_count, exp_count))
+        if data:
+            obs_counts, exp_counts = zip(*data)
+            glm = GLM(obs_counts, exp_counts, family=families.Poisson()).fit()
+            for motif in observed[frag_length]:
+                weights[frag_length][motif] = glm.predict(expected[frag_length].get(motif, 0))[0]
+    return weights
+
+def calculate_glm_fragment_weights(observed, expected):
+    data = []
+    for frag_length in observed:
+        obs_count = observed[frag_length]
+        exp_count = expected.get(frag_length, 0)
+        if obs_count > 0 and exp_count > 0:
+            data.append((obs_count, exp_count))
+    weights = defaultdict(float)
+    if data:
+        obs_counts, exp_counts = zip(*data)
+        glm = GLM(obs_counts, exp_counts, family=families.Poisson()).fit()
+        for frag_length in observed:
+            weights[frag_length] = glm.predict(expected.get(frag_length, 0))[0]
+    return weights
+
+def write_weights_to_tsv(weights, filename):
+    with open(filename, 'w') as f:
+        f.write("FragmentLength\tMotif\tWeight\n")
+        for frag_length in sorted(weights.keys()):
+            for motif, weight in sorted(weights[frag_length].items()):
+                f.write(f"{frag_length}\t{motif}\t{weight}\n")
+
+def write_fragment_weights_to_tsv(weights, filename):
+    with open(filename, 'w') as f:
+        f.write("FragmentLength\tWeight\n")
+        for frag_length, weight in sorted(weights.items()):
+            f.write(f"{frag_length}\t{weight}\n")
+
+def limit_extreme_weights(weights, sod):
+    fs = 10 - sod
+    non_default_weights = [weight for frag_length in weights for weight in weights[frag_length].values() if weight != 1]
+    
+    if not non_default_weights:
+        return weights
+    
+    WQ3 = np.percentile(non_default_weights, 75)
+    IQRW = np.percentile(non_default_weights, 75) - np.percentile(non_default_weights, 25)
+    Wthreshold = WQ3 + fs * IQRW
+
+    for frag_length in weights:
+        for motif in weights[frag_length]:
+            if weights[frag_length][motif] > Wthreshold:
+                weights[frag_length][motif] = Wthreshold
+    
+    return weights
+
+def limit_extreme_fragment_weights(weights, sod):
+    fs = 10 - sod
+    non_default_weights = [weight for weight in weights.values() if weight != 1]
+    
+    if not non_default_weights:
+        return weights
+    
+    WQ3 = np.percentile(non_default_weights, 75)
+    IQRW = np.percentile(non_default_weights, 75) - np.percentile(non_default_weights, 25)
+    Wthreshold = WQ3 + fs * IQRW
+
+    for frag_length in weights:
+        if weights[frag_length] > Wthreshold:
+            weights[frag_length] = Wthreshold
+    
+    return weights
+
+def smooth_weights(weights, sigma):
+
+    motif_to_index, index_to_motif = create_motif_index_mapping(weights)
+    max_frag_length = max(weights.keys())
+    max_motif_index = max(motif_to_index.values())
+    weight_matrix = np.zeros((max_frag_length + 1, max_motif_index + 1))
+
+    for frag_length in weights:
+        for motif in weights[frag_length]:
+            weight_matrix[frag_length, motif_to_index[motif]] = weights[frag_length][motif]
+    
     smoothed_matrix = gaussian_filter(weight_matrix, sigma=sigma)
 
-    smoothed_weights = {(length, motif): smoothed_matrix[length_index[length], motif_index[motif]] for length, motif in keys}
-
+    smoothed_weights = collections.defaultdict(partial(collections.defaultdict, float))
+    for frag_length in weights:
+        for motif in weights[frag_length]:
+            smoothed_weights[frag_length][motif] = smoothed_matrix[frag_length, motif_to_index[motif]]
+    
     return smoothed_weights
 
-def limit_outliers(weights, factor=1.5):
-    logger = logging.getLogger(__name__)
-    logger.info("Limiting outliers in weights outside 25-75% IQR ...")
-    values = np.array(list(weights.values()))
-    q1 = np.percentile(values, 25)
-    q3 = np.percentile(values, 75)
-    iqr = q3 - q1
-    upper_limit = q3 + factor * iqr
+def smooth_fragment_weights(weights, sigma):
 
-    return {key: min(value, upper_limit) for key, value in weights.items()}
+    max_frag_length = max(weights.keys())
+    weight_array = np.zeros(max_frag_length + 1)
 
-def compute_weights(observed, expected):
-    logger = logging.getLogger(__name__)
-    logger.info("Computing bias correction weights ...")
-    return {key: expected.get(key, 1.0) / observed[key] if expected.get(key, 0) > 0 else 1.0 for key in observed}
+    for frag_length in weights:
+        weight_array[frag_length] = weights[frag_length]
+    
+    smoothed_array = gaussian_filter(weight_array, sigma=sigma)
 
-def apply_weights_to_chromosome_worker(bam_file, weights, chromosome, threads, conn):
-    logger = logging.getLogger(__name__)
-    logger.info(f"Applying weights to chromosome {chromosome} and writing to temporary BAM file ...")
-    tmp_output_bam = f"{os.path.splitext(bam_file)[0]}_{chromosome}.bam"
-    with pysam.AlignmentFile(bam_file, "rb", threads=threads) as bam, \
-         pysam.AlignmentFile(tmp_output_bam, "wb", header=bam.header) as out_bam:
-        for read in bam.fetch(chromosome):
-            if read.is_proper_pair and MIN_FRAGMENT_LENGTH <= abs(read.template_length) <= MAX_FRAGMENT_LENGTH:
-                seq = read.query_sequence
-                length = len(seq)
-                end_motif = seq[:4]
-                if 'N' not in end_motif:
-                    weight = weights.get((length, end_motif), 1.0)
-                    read.set_tag("EM", weight)  # Adding weight as a custom tag
-                    out_bam.write(read)
-    conn.send(tmp_output_bam)
+    smoothed_weights = defaultdict(float)
+    for frag_length in weights:
+        smoothed_weights[frag_length] = smoothed_array[frag_length]
+    
+    return smoothed_weights
+
+def create_motif_index_mapping(weights):
+    motifs = set()
+    for frag_length in weights:
+        motifs.update(weights[frag_length].keys())
+    motif_to_index = {motif: i for i, motif in enumerate(sorted(motifs))}
+    index_to_motif = {i: motif for motif, i in motif_to_index.items()}
+    return motif_to_index, index_to_motif
+
+def add_tags_to_read(read, motif_weights, fragment_weights):
+    fragment_length = read.template_length
+    if read.flag in (99, 163):
+        end_motif = read.query_sequence[:4]
+    elif read.flag in (83, 147):
+        end_motif = ''.join(rc[base] for base in reversed(read.query_sequence[-4:]))
+    else:
+        end_motif = "NNNN"  # Handle unexpected cases
+    
+    em_weight = motif_weights.get(fragment_length, {}).get(end_motif, 1.0)
+    fl_weight = fragment_weights.get(fragment_length, 1.0)
+    read.set_tag("EM", em_weight)
+    read.set_tag("FL", fl_weight)
+    return read
+
+def process_chromosome_with_tags(chromosome, bam_file, motif_weights, fragment_weights, fragment_min, fragment_max, tmp_dir, conn):
+    logging.info(f"Processing chromosome: {chromosome}")
+    bam_in = pysam.AlignmentFile(bam_file, "rb")
+    tagged_bam_file = os.path.join(tmp_dir, f"{chromosome}_tagged.bam")
+    bam_out = pysam.AlignmentFile(tagged_bam_file, "wb", template=bam_in)
+
+    for read in bam_in.fetch(chromosome):
+        if (read.is_proper_pair and
+            not read.is_supplementary and
+            read.reference_name in [f'chr{i}' for i in range(1, 23)] and
+            fragment_min <= read.template_length <= fragment_max and
+            'N' not in read.query_sequence[:4]):
+            
+            read = add_tags_to_read(read, motif_weights, fragment_weights)
+            bam_out.write(read)
+
+    bam_in.close()
+    bam_out.close()
+    conn.send(tagged_bam_file)
+    conn.send(None)  # Signal that this chromosome is done
     conn.close()
 
-def apply_weights_to_chromosomes(bam_file, weights, output_bam_prefix, chromosomes, threads):
-    logger = logging.getLogger(__name__)
-    logger.info(f"Applying weights to chromosomes in parallel ...")
+def sort_and_merge_bam_files(output_bam_file, tmp_dir, num_chromosomes, pipes, num_cores):
+    logging.info(f"Starting to sort and merge BAM files into {output_bam_file}")
+    sorted_bam_files = []
 
+    finished_chromosomes = 0
+    while finished_chromosomes < num_chromosomes:
+        for pipe in pipes:
+            tagged_bam_file = pipe.recv()
+            if tagged_bam_file is None:
+                finished_chromosomes += 1
+                logging.info(f"Finished processing chromosome: {finished_chromosomes}/{num_chromosomes}")
+                pipes.remove(pipe)
+            else:
+                # Sort the temporary BAM file
+                sorted_bam_file = os.path.join(tmp_dir, f"sorted_{os.path.basename(tagged_bam_file)}")
+                pysam.sort("-@", str(num_cores), "-o", sorted_bam_file, tagged_bam_file)
+                sorted_bam_files.append(sorted_bam_file)
+    
+    if sorted_bam_files:
+        # Merge the sorted BAM files
+        tmp_merged_bam_file = os.path.join(tmp_dir, "merged_sorted.bam")
+        pysam.merge("-@", str(num_cores), tmp_merged_bam_file, *sorted_bam_files)
+        os.rename(tmp_merged_bam_file, output_bam_file)
+        
+        for bam_file in sorted_bam_files:
+            os.remove(bam_file)  # Remove temporary sorted BAM files
+    
+    logging.info(f"Finished sorting and merging BAM files into {output_bam_file}")
+
+def parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif_weights, fragment_weights, fragment_min, fragment_max, num_cores, tmp_dir):
     processes = []
     parent_conns = []
-
-    # Split work among processes
+    
     for chromosome in chromosomes:
-        parent_conn, child_conn = Pipe()
-        parent_conns.append(parent_conn)
-        p = Process(target=apply_weights_to_chromosome_worker, args=(bam_file, weights, chromosome, threads, child_conn))
+        parent_conn, child_conn = multiprocessing.Pipe()
+        p = multiprocessing.Process(target=process_chromosome_with_tags, args=(chromosome, bam_file, motif_weights, fragment_weights, fragment_min, fragment_max, tmp_dir, child_conn))
         processes.append(p)
+        parent_conns.append(parent_conn)
         p.start()
 
-    # Collect results from worker processes
-    temp_bam_files = []
-    for parent_conn in parent_conns:
-        result = parent_conn.recv()
-        temp_bam_files.append(result)
+    merger_process = multiprocessing.Process(target=sort_and_merge_bam_files, args=(output_bam_file, tmp_dir, len(chromosomes), parent_conns, num_cores))
+    merger_process.start()
 
-    # Ensure all processes have finished
     for p in processes:
         p.join()
 
-    return temp_bam_files
-
-def sort_bam(temp_bam, threads):
-    sorted_temp_file = f"{temp_bam}.sorted.bam"
-    pysam.sort("-o", sorted_temp_file, temp_bam, threads=threads)
-    os.remove(temp_bam)  # Clean up the temporary unsorted BAM file
-    return sorted_temp_file
-
-def sort_and_merge_bams(temp_bam_files, output_bam, threads):
-    logger = setup_logging()
-    logger.info(f"Sorting temporary BAM files ...")
-
-    # Sort each temporary BAM file in parallel
-    with Pool(threads) as pool:
-        sorted_temp_files = pool.starmap(sort_bam, [(temp_bam, threads) for temp_bam in temp_bam_files])
-
-    # Merge sorted BAM files
-    logger.info(f"Merging temporary BAM files into final BAM file ...")
-    pysam.merge("-f", output_bam, *sorted_temp_files, threads=threads)
-
-    # Clean up sorted temporary BAM files
-    for sorted_temp_file in sorted_temp_files:
-        os.remove(sorted_temp_file)
-
-def write_to_tsv(data, output_file):
-    with open(output_file, 'w') as f:
-        for key, value in data.items():
-            length, motif = key
-            f.write(f"{length}\t{motif}\t{value}\n")
+    merger_process.join()
 
 def main():
-    args = parse_args()
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
-    logger.info(f"Starting end motif bias correction process for BAM {args.input_bam} ...")
+    parser = argparse.ArgumentParser(description='Process BAM file for 5\'-end motif bias correction and simulate end motifs from genome.')
+    parser.add_argument('-i', '--input', type=str, required=True, help='Input BAM file')
+    parser.add_argument('-o', '--output-observed', type=str, help='Output file for observed results')
+    parser.add_argument('-e', '--output-expected', type=str, help='Output file for expected (simulated) results')
+    parser.add_argument('-fo', '--output-fragment-observed', type=str, help='Output file for observed fragment length counts')
+    parser.add_argument('-fe', '--output-fragment-expected', type=str, help='Output file for expected (simulated) fragment length counts')
+    parser.add_argument('-cw', '--correction-weights', type=str, required=True, help='Output file for correction weights')
+    parser.add_argument('-fcw', '--fragment-correction-weights', type=str, required=True, help='Output file for fragment length correction weights')
+    parser.add_argument('-cm', '--correction-method', type=str, choices=['simple', 'glm'], default='simple', help='Method for calculating correction weights (default: simple)')
+    parser.add_argument('-f', '--fragment-min', type=int, default=50, help='Minimum fragment length (default: 50)')
+    parser.add_argument('-F', '--fragment-max', type=int, default=550, help='Maximum fragment length (default: 550)')
+    parser.add_argument('-c', '--chromosomes', type=str, nargs='+', default=[f'chr{i}' for i in range(1, 23)], help='List of chromosomes to process (default: chr1 to chr22)')
+    parser.add_argument('-l', '--log', type=str, default="process.log", help='Log file (default: process.log)')
+    parser.add_argument('-n', '--num-cores', type=int, default=multiprocessing.cpu_count(), help='Number of CPU cores to use (default: all available cores)')
+    parser.add_argument('-t', '--twobit', type=str, required=True, help='2bit file of the reference genome')
+    parser.add_argument('-s', '--num-simulations', type=int, default=200000000, help='Number of simulations to perform (default: 200M)')
+    parser.add_argument('-b', '--blacklist', type=str, required=True, help='BED file with blacklisted regions')
+    parser.add_argument('-sod', '--stringency', type=int, default=3, help='Outlier detection stringency (default: 3)')
+    parser.add_argument('-sg', '--smoothing-sigma', type=float, default=2.0, help='Sigma for Gaussian smoothing (default: 2.0)')
+    parser.add_argument('-obam', '--output-bam', type=str, help='Output BAM file with added tags')
 
-    # Load exclusion regions
-    excluded_regions = load_exclusion_bed(args.exclusion_bed)
+    args = parser.parse_args()
 
-    # Count observed attributes
-    observed_attributes = count_attributes(args.input_bam, args.threads)
+    logging.basicConfig(filename=args.log, level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    
+    bam_file = args.input
+    output_observed = args.output_observed
+    output_expected = args.output_expected
+    output_fragment_observed = args.output_fragment_observed
+    output_fragment_expected = args.output_fragment_expected
+    correction_weights_file = args.correction_weights
+    fragment_correction_weights_file = args.fragment_correction_weights
+    correction_method = args.correction_method
+    fragment_min = args.fragment_min
+    fragment_max = args.fragment_max
+    chromosomes = args.chromosomes
+    num_cores = args.num_cores
+    twobit_file = args.twobit
+    num_simulations = args.num_simulations
+    blacklist_file = args.blacklist
+    output_bam_file = args.output_bam
 
-    # Get fragment lengths for simulation
-    fragment_lengths = [length for length, motif in observed_attributes.keys()]
+    tmp_dir = "tmp_bam_dir"
+    os.makedirs(tmp_dir, exist_ok=True)
 
-    # Simulate expected attributes
-    expected_attributes = simulate_attributes(args.reference_genome, fragment_lengths, excluded_regions, args.num_simulations, args.threads)
+    logging.info(f"Loading blacklist file: {blacklist_file} ...")
+    blacklist_trees = load_blacklist(blacklist_file)
+    logging.info(f"Blacklist loaded ...")
+    
+    logging.info(f"Precomputing allowed intervals for chromosomes ...")
+    allowed_intervals_dict = precompute_allowed_intervals(chromosomes, twobit_file, blacklist_trees)
+    logging.info(f"Allowed intervals precomputed ...")
 
-    # Compute bias correction weights
-    weights = compute_weights(observed_attributes, expected_attributes)
+    logging.info(f"Processing file: {bam_file} ...")
+    bam_results, bam_fragment_counts = parallel_process_bam(bam_file, chromosomes, fragment_min, fragment_max, num_cores)
+    logging.info(f"BAM processing complete ...")
+    
+    logging.info(f"Simulating {num_simulations} end motifs and fragment lengths from genome ...")
+    sim_results, sim_fragment_counts = parallel_simulate_motifs(twobit_file, chromosomes, fragment_min, fragment_max, num_simulations, num_cores, allowed_intervals_dict)
+    logging.info(f"Simulations complete ...")
 
-    # Mask rare or absent attributes
-    mask = mask_rare_attributes(observed_attributes, threshold=args.mask_threshold)
-    masked_weights = apply_mask(weights, mask)
+    if output_observed:
+        with open(output_observed, 'w') as f_obs:
+            f_obs.write("FragLength\tEndMotif\tCount\n")
+            for fragment_length, motifs in sorted(bam_results.items()):
+                for motif, count in sorted(motifs.items()):
+                    f_obs.write(f"{fragment_length}\t{motif}\t{count}\n")
+    
+    if output_fragment_observed:
+        with open(output_fragment_observed, 'w') as f_frag_obs:
+            f_frag_obs.write("FragLength\tCount\n")
+            for fragment_length, count in sorted(bam_fragment_counts.items()):
+                f_frag_obs.write(f"{fragment_length}\t{count}\n")
+    
+    if output_expected:
+        with open(output_expected, 'w') as f_exp:
+            f_exp.write("FragLength\tEndMotif\tCount\n")
+            for fragment_length, motifs in sorted(sim_results.items()):
+                for motif, count in sorted(motifs.items()):
+                    f_exp.write(f"{fragment_length}\t{motif}\t{count}\n")
+    
+    if output_fragment_expected:
+        with open(output_fragment_expected, 'w') as f_frag_exp:
+            f_frag_exp.write("FragLength\tCount\n")
+            for fragment_length, count in sorted(sim_fragment_counts.items()):
+                f_frag_exp.write(f"{fragment_length}\t{count}\n")
+    
+    if correction_method == 'simple':
+        logging.info("Calculating simple correction weights ...")
+        motif_weights = calculate_simple_weights(bam_results, sim_results)
+        fragment_weights = calculate_simple_fragment_weights(bam_fragment_counts, sim_fragment_counts)
+    elif correction_method == 'glm':
+        logging.info("Calculating GLM correction weights ...")
+        motif_weights = calculate_glm_weights(bam_results, sim_results)
+        fragment_weights = calculate_glm_fragment_weights(bam_fragment_counts, sim_fragment_counts)
+    
+    logging.info("Applying extreme weight limitation ...")
+    motif_weights = limit_extreme_weights(motif_weights, args.stringency)
+    fragment_weights = limit_extreme_fragment_weights(fragment_weights, args.stringency)
 
-    # Smooth weights
-    smoothed_weights = smooth_weights(masked_weights, sigma=args.smoothing_sigma)
+    logging.info("Applying Gaussian smoothing ...")
+    motif_weights = smooth_weights(motif_weights, args.smoothing_sigma)
+    fragment_weights = smooth_fragment_weights(fragment_weights, args.smoothing_sigma)
 
-    # Limit outliers in weights
-    limited_weights = limit_outliers(smoothed_weights, factor=args.iqr_factor)
+    logging.info("Writing correction weights to files ...")
+    write_weights_to_tsv(motif_weights, correction_weights_file)
+    write_fragment_weights_to_tsv(fragment_weights, fragment_correction_weights_file)
+    logging.info("Correction weights written to files.")
 
-    # Apply weights to chromosomes
-    bam_file = args.input_bam
-    chromosomes = [chrom for chrom in pysam.AlignmentFile(bam_file).references if chrom in CHROMOSOMES_TO_PROCESS]
+    if output_bam_file:
+        logging.info("Adding tags to BAM file ...")
+        parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif_weights, fragment_weights, fragment_min, fragment_max, num_cores, tmp_dir)
+        logging.info("Tagged BAM file written.")
 
-    # Process each chromosome in parallel
-    temp_bam_files = apply_weights_to_chromosomes(bam_file, limited_weights, args.output_bam, chromosomes, args.threads)
-
-    # Sort and merge temporary BAM files if --sort is specified
-    if args.sort_bam:
-        sort_and_merge_bams(temp_bam_files, args.output_bam, args.threads)
-    else:
-        logger.info("Skipping sorting and merging of temporary BAM files.")
-
-    # Write observed and expected counts to TSV files if specified
-    if args.output_observed:
-        write_to_tsv(observed_attributes, 'observed.tsv')
-    if args.output_expected:
-        write_to_tsv(expected_attributes, 'expected.tsv')
-
-    logger.info("Completed ...")
+    logging.info("Complete ...")
+    shutil.rmtree(tmp_dir)
 
 if __name__ == "__main__":
     main()
