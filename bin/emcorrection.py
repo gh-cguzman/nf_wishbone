@@ -1,10 +1,5 @@
-
-from functools import partial
+#!/usr/bin/env python3
 import collections
-
-# Replacing lambda functions with partial
-weights = collections.defaultdict(partial(collections.defaultdict, float))
-smoothed_weights = collections.defaultdict(partial(collections.defaultdict, float))
 import pysam
 import multiprocessing
 from functools import partial
