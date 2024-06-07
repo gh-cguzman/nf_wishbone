@@ -13,14 +13,14 @@ def setup_logging():
 
 def read_bed_file(file):
     """Read a single BED file and return a DataFrame."""
-    logging.info(f"Reading BED file: {file}")
+    #logging.info(f"Reading BED file: {file}")
     bed = pd.read_csv(file, sep='\t', header=None, skiprows=1)
     bed['source_file'] = file
     return bed
 
 def extend_bed_regions(bed, window=5000):
     """Extend BED regions by ±window bp."""
-    logging.info(f"Extending BED regions by ±{window} bp")
+    #logging.info(f"Extending BED regions by ±{window} bp")
     bed[1] = bed[1] - window
     bed[2] = bed[2] + window
     bed[1] = bed[1].clip(lower=0)  # Ensure start is not less than 0
@@ -28,14 +28,14 @@ def extend_bed_regions(bed, window=5000):
 
 def filter_chr(bed):
     """Keep only regions in chr1 to chr22."""
-    logging.info("Filtering BED regions to keep only chr1 to chr22")
+    #logging.info("Filtering BED regions to keep only chr1 to chr22")
     chr_filter = ['chr' + str(i) for i in range(1, 23)]
     bed_filtered = bed[bed[0].isin(chr_filter)].copy()
     return bed_filtered
 
 def human_sort_bed(bed):
     """Sort BED file in human-readable order (chr1, chr2, ..., chr10, chr11, ..., chr22)."""
-    logging.info("Sorting BED regions in human-readable order")
+    #logging.info("Sorting BED regions in human-readable order")
     bed.loc[:, 'chrom'] = pd.Categorical(bed[0], categories=[f'chr{i}' for i in range(1, 23)], ordered=True)
     sorted_bed = bed.sort_values(['chrom', 1, 2])
     return sorted_bed.drop(columns='chrom')
