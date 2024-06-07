@@ -1,154 +1,181 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
-import pysam
-import pybedtools
-import numpy as np
-import pandas as pd
 import logging
+import pandas as pd
+import pysam
+import numpy as np
+from intervaltree import Interval, IntervalTree
 from scipy.signal import savgol_filter
-from joblib import Parallel, delayed
-import os
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+def setup_logging():
+    """Setup logging configuration."""
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def parse_arguments():
-    parser = argparse.ArgumentParser(description="Calculate GC tag sums across genomic positions for multiple BED files")
-    parser.add_argument("--bam", required=True, help="Input GC corrected BAM file")
-    parser.add_argument("--beds", required=True, nargs='+', help="Input BED files of genomic positions")
-    parser.add_argument("--min_fl", type=int, default=110, help="Minimum fragment length")
-    parser.add_argument("--max_fl", type=int, default=230, help="Maximum fragment length")
-    parser.add_argument("--output", required=True, help="Output file for the normalized and smoothed matrix")
-    parser.add_argument("--output_raw", required=True, help="Output file for the raw matrix")
-    parser.add_argument("--threads", type=int, default=os.cpu_count(), help="Number of threads to use for parallel processing")
-    parser.add_argument("--range", type=int, default=1000, help="Range around center to consider for GC tag sums (+/-)")
-    parser.add_argument("--sample_id", required=True, help="Sample ID for the output file")
-    return parser.parse_args()
+def concat_bed_files(bed_files):
+    """Concatenate multiple BED files and keep track of the source file."""
+    bed_frames = []
+    for file in bed_files:
+        logging.info(f"Reading BED file: {file}")
+        bed = pd.read_csv(file, sep='\t', header=None, skiprows=1)
+        bed['source_file'] = file
+        bed_frames.append(bed)
+    concatenated = pd.concat(bed_frames, ignore_index=True)
+    return concatenated
 
-def get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range):
-    gc_sums = np.zeros(window_range * 2 + 1)
-    start = center - window_range
-    end = center + window_range
+def extend_bed_regions(bed, window=5000):
+    """Extend BED regions by ±window bp."""
+    logging.info(f"Extending BED regions by ±{window} bp")
+    bed[1] = bed[1] - window
+    bed[2] = bed[2] + window
+    bed[1] = bed[1].clip(lower=0)  # Ensure start is not less than 0
+    return bed
 
-    if chrom not in [f'chr{i}' for i in range(1, 23)]:
-        return gc_sums
+def filter_chr(bed):
+    """Keep only regions in chr1 to chr22."""
+    logging.info("Filtering BED regions to keep only chr1 to chr22")
+    chr_filter = ['chr' + str(i) for i in range(1, 23)]
+    bed_filtered = bed[bed[0].isin(chr_filter)].copy()
+    return bed_filtered
 
-    for read in bamfile.fetch(chrom, start, end):
-        if not read.is_proper_pair or read.is_unmapped or read.mapping_quality == 0 or read.is_supplementary:
+def human_sort_bed(bed):
+    """Sort BED file in human-readable order (chr1, chr2, ..., chr10, chr11, ..., chr22)."""
+    logging.info("Sorting BED regions in human-readable order")
+    bed.loc[:, 'chrom'] = pd.Categorical(bed[0], categories=[f'chr{i}' for i in range(1, 23)], ordered=True)
+    sorted_bed = bed.sort_values(['chrom', 1, 2])
+    return sorted_bed.drop(columns='chrom')
+
+def build_interval_tree(bed):
+    """Build an interval tree from the BED dataframe."""
+    logging.info("Building interval tree from BED regions")
+    interval_trees = {f'chr{i}': IntervalTree() for i in range(1, 23)}
+    for index, row in bed.iterrows():
+        chrom = row[0]
+        start = row[1]
+        end = row[2]
+        interval_trees[chrom][start:end] = index
+    return interval_trees
+
+def process_bam(bam_file, bed, interval_trees, min_fragment_size=100, max_fragment_size=200):
+    """Process BAM file and calculate the GC content in extended BED regions."""
+    logging.info(f"Processing BAM file: {bam_file}")
+    bed['array'] = bed.apply(lambda x: np.zeros(x[2] - x[1] + 1), axis=1)
+
+    bamfile = pysam.AlignmentFile(bam_file, "rb")
+    read_count = 0
+    
+    for read in bamfile.fetch():
+        read_count += 1
+        if read_count % 10_000_000 == 0:
+            logging.info(f"Processed {read_count // 1_000_000}M reads")
+        
+        if not read.is_proper_pair or read.is_duplicate or read.is_supplementary:
             continue
-        if min_fl <= read.template_length <= max_fl:
-            gc_pos = read.reference_start - start
-            if 0 <= gc_pos < len(gc_sums):
-                gc_sums[gc_pos] += read.get_tag("GC")
+        
+        if min_fragment_size <= read.template_length <= max_fragment_size:
+            midpoint = (read.reference_start + read.template_length) // 2
+            gc_value = 1 / read.get_tag('GC')
 
-    return gc_sums
-
-def calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl):
-    upstream_start = center - 1500
-    upstream_end = center
-    downstream_start = center
-    downstream_end = center + 1500
-
-    upstream_gc_sum = 0
-    downstream_gc_sum = 0
-
-    if chrom not in [f'chr{i}' for i in range(1, 23)]:
-        return 1
-
-    for read in bamfile.fetch(chrom, upstream_start, upstream_end):
-        if not read.is_proper_pair or read.is_unmapped or read.mapping_quality == 0 or read.is_supplementary:
-            continue
-        if min_fl <= read.template_length <= max_fl:
-            upstream_gc_sum += read.get_tag("GC")
-
-    for read in bamfile.fetch(chrom, downstream_start, downstream_end):
-        if not read.is_proper_pair or read.is_unmapped or read.mapping_quality == 0 or read.is_supplementary:
-            continue
-        if min_fl <= read.template_length <= max_fl:
-            downstream_gc_sum += read.get_tag("GC")
-
-    normalization_factor = (upstream_gc_sum + downstream_gc_sum) / 3000
-    if normalization_factor == 0:
-        normalization_factor = 1  # Avoid division by zero
-
-    return normalization_factor
-
-def process_bed_file(bed_file, args):
-    bed = pybedtools.BedTool(bed_file)
-    base_name = os.path.basename(bed_file).split('.')[0]
-    min_fl = args.min_fl
-    max_fl = args.max_fl
-    window_range = args.range
-
-    bamfile = pysam.AlignmentFile(args.bam, "rb")
-
-    logging.info(f"Processing intervals for {bed_file} ...")
-    intervals = [(interval.chrom, (interval.start + interval.end) // 2) for interval in bed]
-
-    normalized_gc_sums_list = np.zeros((len(intervals), window_range * 2 + 1))
-    raw_gc_sums_list = np.zeros((len(intervals), window_range * 2 + 1))
-
-    for i, (chrom, center) in enumerate(intervals):
-        gc_sums = get_gc_tag_sums(bamfile, chrom, center, min_fl, max_fl, window_range)
-        normalization_factor = calculate_normalization_factors(bamfile, chrom, center, min_fl, max_fl)
-
-        normalized_gc_sums = gc_sums / normalization_factor
-        normalized_gc_sums_list[i] = normalized_gc_sums
-        raw_gc_sums_list[i] = gc_sums
-
+            if read.reference_name in interval_trees:
+                overlaps = interval_trees[read.reference_name][midpoint]
+                for interval in overlaps:
+                    index = interval.data
+                    start = bed.at[index, 1]
+                    pos_in_array = midpoint - start
+                    bed.at[index, 'array'][pos_in_array] += gc_value
+    
     bamfile.close()
+    logging.info(f"Finished processing BAM file with {read_count} reads")
+    return bed
 
-    # Remove bins with extremely high coverage (10 standard deviations above the mean)
-    logging.info(f"Removing outlier bins for {bed_file} ...")
-    mean_coverage = np.mean(normalized_gc_sums_list, axis=0)
-    std_coverage = np.std(normalized_gc_sums_list, axis=0)
-    filtered_gc_sums = normalized_gc_sums_list[np.all(normalized_gc_sums_list <= mean_coverage + 10 * std_coverage, axis=1)]
+def filter_high_coverage_bins(bed, threshold=10):
+    """Filter out regions with extremely high coverage (above threshold standard deviations)."""
+    logging.info(f"Filtering out regions with coverage above {threshold} standard deviations")
+    all_values = np.concatenate(bed['array'].values)
+    mean = np.mean(all_values)
+    std = np.std(all_values)
+    cutoff = mean + threshold * std
+    
+    bed['filtered_array'] = np.empty((len(bed),), dtype=object)
+    for index, row in bed.iterrows():
+        array = row['array']
+        array[array > cutoff] = 0
+        bed.at[index, 'filtered_array'] = array
+    return bed
 
-    mean_gc_sums = np.mean(filtered_gc_sums, axis=0)
+def average_coverage_by_source(bed):
+    """Compute the average coverage for each source file."""
+    logging.info("Computing average coverage for each source file")
+    result = {}
+    for source_file, group in bed.groupby('source_file'):
+        filtered_arrays = np.vstack(group['filtered_array'].values)
+        avg_coverage = np.mean(filtered_arrays, axis=0)
+        result[source_file] = avg_coverage
+    return result
 
-    # Smooth coverage profiles with window length 165 and polynomial order 3
-    smoothed_gc_sums = savgol_filter(mean_gc_sums, window_length=165, polyorder=3)
+def smooth_and_normalize(averages):
+    """Smooth and normalize arrays."""
+    logging.info("Smoothing and normalizing coverage")
+    smoothed_averages = {}
+    for source_file, avg_coverage in averages.items():
+        # Normalize to a mean coverage of 1 across the -5000 to +5000 region
+        mean_coverage = np.mean(avg_coverage)
+        if mean_coverage > 0:
+            normalized_coverage = avg_coverage / mean_coverage
+        else:
+            normalized_coverage = np.zeros_like(avg_coverage)
+        # Extract -1000 to +1000 region
+        coverage_region = normalized_coverage[4000:6001]
+        # Smooth the coverage region
+        filtered_array = savgol_filter(coverage_region, window_length=165, polyorder=3)
+        smoothed_averages[source_file] = filtered_array
+    return smoothed_averages
 
-    # Normalize coverage profile to mean coverage of 1 across +/-1000bp window
-    normalized_gc_sums = smoothed_gc_sums / np.mean(smoothed_gc_sums)
+def save_averaged_coverage_to_tsv(averages, output_file, sample_id):
+    """Save the averaged coverage data to a TSV file."""
+    logging.info(f"Saving averaged coverage to TSV file: {output_file}")
+    with open(output_file, 'w') as f:
+        header = ["Sample_ID", "BED_File"] + [str(i) for i in range(-1000, 1001)]
+        f.write("\t".join(header) + "\n")
+        
+        for source_file, avg_coverage in averages.items():
+            bed_file = source_file.split('.')[0]
+            line = [sample_id, bed_file] + list(map(str, avg_coverage))
+            f.write("\t".join(line) + "\n")
 
-    # Create the single-row output for normalized and smoothed data
-    output_row = [args.sample_id, base_name] + normalized_gc_sums.tolist()
-
-    # Create the single-row output for raw data
-    raw_output_row = [args.sample_id, base_name] + np.mean(raw_gc_sums_list, axis=0).tolist()
-
-    return output_row, raw_output_row
-
-def process_bed_files_in_parallel(args, bed_files):
-    results = Parallel(n_jobs=args.threads)(delayed(process_bed_file)(bed_file, args) for bed_file in bed_files)
-    return results
-
-def main():
-    args = parse_arguments()
-
-    window_range = args.range
-    results = []
-    raw_results = []
-
-    logging.info("Processing BED files in parallel...")
-    parallel_results = process_bed_files_in_parallel(args, args.beds)
-
-    logging.info("Staging results ...")
-    for result_pair in parallel_results:
-        results.append(result_pair[0])
-        raw_results.append(result_pair[1])
-
-    # Save the results to output files
-    positions = np.arange(-window_range, window_range + 1)
-    output_columns = ["Sample_ID", "BED_File"] + [str(i) for i in positions]
-    output_df = pd.DataFrame(results, columns=output_columns)
-    output_df.to_csv(args.output, sep='\t', index=False)
-
-    raw_output_df = pd.DataFrame(raw_results, columns=output_columns)
-    raw_output_df.to_csv(args.output_raw, sep='\t', index=False)
-
-    logging.info("Script completed successfully")
+def main(args):
+    setup_logging()
+    
+    bed_files = args.bed_files
+    bam_file = args.bam_file
+    output_file = args.output_file
+    sample_id = args.sample_id
+    min_fragment_size = args.min_fragment_size
+    max_fragment_size = args.max_fragment_size
+    
+    concatenated_bed = concat_bed_files(bed_files)
+    extended_bed = extend_bed_regions(concatenated_bed, window=5000)
+    filtered_bed = filter_chr(extended_bed)
+    sorted_bed = human_sort_bed(filtered_bed)
+    
+    interval_trees = build_interval_tree(sorted_bed)
+    processed_bed = process_bam(bam_file, sorted_bed, interval_trees, min_fragment_size, max_fragment_size)
+    
+    filtered_bed = filter_high_coverage_bins(processed_bed, threshold=10)
+    
+    averaged_coverage = average_coverage_by_source(filtered_bed)
+    
+    smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
+    
+    save_averaged_coverage_to_tsv(smoothed_normalized_averages, output_file, sample_id)
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Process BAM and BED files.")
+    parser.add_argument("-b", "--bed-files", nargs='+', required=True, help="List of BED files.")
+    parser.add_argument("-B", "--bam-file", required=True, help="Input BAM file.")
+    parser.add_argument("-o", "--output-file", required=True, help="Output TSV file.")
+    parser.add_argument("-s", "--sample-id", required=True, help="Sample ID.")
+    parser.add_argument("-m", "--min-fragment-size", type=int, default=110, help="Minimum fragment size.")
+    parser.add_argument("-M", "--max-fragment-size", type=int, default=230, help="Maximum fragment size.")
+    
+    args = parser.parse_args()
+    main(args)

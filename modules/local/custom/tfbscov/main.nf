@@ -10,7 +10,6 @@ process CREATE_TFBSCOV_MATRIX {
 
     output:
     tuple val(meta), path("*.mat.smoothed.norm.tsv")     , emit: smooth_norm_mat
-    tuple val(meta), path("*.mat.raw.tsv")               , emit: raw_mat
     tuple val(meta), path("*.features.smoothed.norm.tsv"), emit: smooth_norm_features
     tuple val(meta), path("plots/*coverage_plot.png")   , emit: cov_png
     tuple val(meta), path("plots/*fft_plot.png")        , emit: fft_png
@@ -25,12 +24,10 @@ process CREATE_TFBSCOV_MATRIX {
     mkdir -p plots/
 
     bam2tfbscov.py \\
-    --bam $bam \\
-    --beds $motif_beds \\
-    --output ${bam.baseName}.mat.smoothed.norm.tsv \\
-    --output_raw ${bam.baseName}.mat.raw.tsv \\
-    --threads $task.cpus \\
-    --sample_id ${bam.baseName}
+    -B $bam \\
+    -b $motif_beds \\
+    -o ${bam.baseName}.mat.smoothed.norm.tsv \\
+    -s ${bam.baseName}
 
     tfbsmat2features.py \\
     --input ${bam.baseName}.mat.smoothed.norm.tsv \\

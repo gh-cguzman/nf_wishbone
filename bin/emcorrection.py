@@ -192,7 +192,7 @@ def calculate_simple_weights(observed, expected):
             if obs_count <= 20 or exp_count <= 20:
                 weights[frag_length][motif] = 1
             else:
-                weights[frag_length][motif] = exp_count / obs_count
+                weights[frag_length][motif] = 1 / (exp_count / obs_count)
     return weights
 
 def calculate_simple_fragment_weights(observed, expected):
@@ -203,7 +203,7 @@ def calculate_simple_fragment_weights(observed, expected):
         if obs_count <= 20 or exp_count <= 20:
             weights[frag_length] = 1
         else:
-            weights[frag_length] = exp_count / obs_count
+            weights[frag_length] = 1 / (exp_count / obs_count)
     return weights
 
 def calculate_glm_weights(observed, expected):
@@ -219,7 +219,7 @@ def calculate_glm_weights(observed, expected):
             obs_counts, exp_counts = zip(*data)
             glm = GLM(obs_counts, exp_counts, family=families.Poisson()).fit()
             for motif in observed[frag_length]:
-                weights[frag_length][motif] = glm.predict(expected[frag_length].get(motif, 0))[0]
+                weights[frag_length][motif] = 1 / (glm.predict(expected[frag_length].get(motif, 0))[0])
     return weights
 
 def calculate_glm_fragment_weights(observed, expected):
@@ -234,7 +234,7 @@ def calculate_glm_fragment_weights(observed, expected):
         obs_counts, exp_counts = zip(*data)
         glm = GLM(obs_counts, exp_counts, family=families.Poisson()).fit()
         for frag_length in observed:
-            weights[frag_length] = glm.predict(expected.get(frag_length, 0))[0]
+            weights[frag_length] = 1 / (glm.predict(expected.get(frag_length, 0))[0])
     return weights
 
 def write_weights_to_tsv(weights, filename):

@@ -30,8 +30,8 @@ def calculate_features(df, plot_dir):
         logging.info(f"Processing sample {sample_id}, bed file {bed_file}")
 
         # Central coverage
-        central_coverage_start = max(center_index - 30, 0)
-        central_coverage_end = min(center_index + 31, len(coverage))
+        central_coverage_start = max(center_index - 50, 0)
+        central_coverage_end = min(center_index + 51, len(coverage))
         central_coverage = np.mean(coverage[central_coverage_start: central_coverage_end])
         #logging.info(f"Calculated central coverage for {sample_id}")
 
@@ -92,7 +92,7 @@ def calculate_features(df, plot_dir):
         logging.info(f"Saved coverage plot for {sample_id}")
 
         # Plotting FFT Amplitude
-        plt.figure(figsize=(10, 6))
+        plt.figure(figsize=(5, 5))
         plt.plot(fft_result, label="FFT Amplitude", linewidth=3, color='lightblue')
         plt.axvline(x=10, color='r', linestyle='--', label="10th Frequency Component")
         plt.xlabel("Frequency")

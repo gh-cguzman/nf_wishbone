@@ -26,7 +26,7 @@ process EMCORRECTION {
     -n $task.cpus \\
     -cw ${bam.baseName}.EMtagged.em.weights.tsv \\
     -fcw ${bam.baseName}.EMtagged.fl.weights.tsv \\
-    -cm simple \\
+    -cm ${params.em_norm} \\
     -l ${bam.baseName}.EMtagged.log
     """
 }
