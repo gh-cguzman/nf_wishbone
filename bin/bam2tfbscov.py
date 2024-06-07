@@ -148,8 +148,8 @@ def main(args):
     
     combined_averages = {}
 
-    for i in range(0, len(bed_files), 20):
-        batch_files = bed_files[i:i+20]
+    for i in range(0, len(bed_files), 5):
+        batch_files = bed_files[i:i+5]
         batch_beds = []
         for bed_file in batch_files:
             bed = read_bed_file(bed_file)
