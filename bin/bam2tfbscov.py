@@ -12,7 +12,6 @@ def setup_logging():
 
 def extend_bed_regions(bed, window=5000):
     """Extend BED regions by ±window bp."""
-    #logging.info(f"Extending BED regions by ±{window} bp")
     bed[1] = bed[1] - window
     bed[2] = bed[2] + window
     bed[1] = bed[1].clip(lower=0)  # Ensure start is not less than 0
@@ -20,14 +19,12 @@ def extend_bed_regions(bed, window=5000):
 
 def filter_chr(bed):
     """Keep only regions in chr1 to chr22."""
-    #logging.info("Filtering BED regions to keep only chr1 to chr22")
     chr_filter = ['chr' + str(i) for i in range(1, 23)]
     bed_filtered = bed[bed[0].isin(chr_filter)].copy()
     return bed_filtered
 
 def human_sort_bed(bed):
     """Sort BED file in human-readable order (chr1, chr2, ..., chr10, chr11, ..., chr22)."""
-    #logging.info("Sorting BED regions in human-readable order")
     bed.loc[:, 'chrom'] = pd.Categorical(bed[0], categories=[f'chr{i}' for i in range(1, 23)], ordered=True)
     sorted_bed = bed.sort_values(['chrom', 1, 2])
     return sorted_bed.drop(columns='chrom')
@@ -79,25 +76,23 @@ def filter_high_coverage_bins(bed_df, threshold=10):
 def average_coverage_by_source(bed_df):
     """Compute the average coverage for each source file."""
     logging.info("Computing average coverage for each source file")
-    result = {}
     filtered_arrays = np.vstack(bed_df['filtered_array'].values)
     avg_coverage = np.mean(filtered_arrays, axis=0)
-    result = avg_coverage
-    return result
+    return avg_coverage
 
 def smooth_and_normalize(average):
     """Smooth and normalize arrays."""
     logging.info("Smoothing and normalizing coverage")
     # Normalize to a mean coverage of 1 across the -5000 to +5000 region
     mean_coverage = np.mean(average)
-    if mean_coverage > 0:
+    if (mean_coverage > 0) and (average.size >= 6001):
         normalized_coverage = average / mean_coverage
+        # Extract -1000 to +1000 region
+        coverage_region = normalized_coverage[4000:6001]
+        # Smooth the coverage region
+        filtered_array = savgol_filter(coverage_region, window_length=165, polyorder=3)
     else:
-        normalized_coverage = np.zeros_like(average)
-    # Extract -1000 to +1000 region
-    coverage_region = normalized_coverage[4000:6001]
-    # Smooth the coverage region
-    filtered_array = savgol_filter(coverage_region, window_length=165, polyorder=3)
+        filtered_array = np.zeros(2001) # In case of invalid data
     return filtered_array
 
 def save_averaged_coverage_to_tsv(averages, output_file, sample_id):
