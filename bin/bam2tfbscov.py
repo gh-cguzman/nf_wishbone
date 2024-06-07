@@ -11,16 +11,12 @@ def setup_logging():
     """Setup logging configuration."""
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def concat_bed_files(bed_files):
-    """Concatenate multiple BED files and keep track of the source file."""
-    bed_frames = []
-    for file in bed_files:
-        logging.info(f"Reading BED file: {file}")
-        bed = pd.read_csv(file, sep='\t', header=None, skiprows=1)
-        bed['source_file'] = file
-        bed_frames.append(bed)
-    concatenated = pd.concat(bed_frames, ignore_index=True)
-    return concatenated
+def read_bed_file(file):
+    """Read a single BED file and return a DataFrame."""
+    logging.info(f"Reading BED file: {file}")
+    bed = pd.read_csv(file, sep='\t', header=None, skiprows=1)
+    bed['source_file'] = file
+    return bed
 
 def extend_bed_regions(bed, window=5000):
     """Extend BED regions by ±window bp."""
@@ -53,33 +49,36 @@ def build_pyranges(bed):
     pr = PyRanges(bed)
     return pr
 
+def process_bed_region(bamfile, bed_region, min_fragment_size, max_fragment_size):
+    """Process a single BED region and calculate the GC content."""
+    chrom = bed_region.Chromosome
+    start = bed_region.Start
+    end = bed_region.End
+    array = np.zeros(end - start + 1)  # Reset the array to zeros
+
+    for read in bamfile.fetch(chrom, start, end):
+        if not read.is_proper_pair or read.is_duplicate or read.is_supplementary:
+            continue
+        if min_fragment_size <= read.template_length <= max_fragment_size:
+            midpoint = read.reference_start + read.template_length // 2
+            gc_value = read.get_tag('GC')
+            pos_in_array = midpoint - start
+            if 0 <= pos_in_array < len(array):
+                array[pos_in_array] += gc_value
+
+    return array
+
 def process_bam(bam_file, bed_pr, min_fragment_size, max_fragment_size):
     """Process BAM file and calculate the GC content in extended BED regions."""
     logging.info(f"Processing BAM file: {bam_file}")
+    bamfile = pysam.AlignmentFile(bam_file, "rb")
     bed_df = bed_pr.df.copy()
     bed_df['array'] = [np.zeros(end - start + 1) for start, end in zip(bed_df['Start'], bed_df['End'])]
-    bamfile = pysam.AlignmentFile(bam_file, "rb")
 
     for bed_region in bed_df.itertuples():
-        chrom = bed_region.Chromosome
-        start = bed_region.Start
-        end = bed_region.End
-        array = np.zeros(end - start + 1)  # Reset the array to zeros
-
-        for read in bamfile.fetch(chrom, start, end):
-            if not read.is_proper_pair or read.is_duplicate or read.is_supplementary:
-                continue
-            if min_fragment_size <= read.template_length <= max_fragment_size:
-                midpoint = read.reference_start + read.template_length // 2
-                gc_value = read.get_tag('GC')
-                pos_in_array = midpoint - start
-                if 0 <= pos_in_array < len(array):
-                    array[pos_in_array] += gc_value
-
-        bed_df.at[bed_region.Index, 'array'] = array  # Update the array in the DataFrame
+        bed_df.at[bed_region.Index, 'array'] = process_bed_region(bamfile, bed_region, min_fragment_size, max_fragment_size)
 
     bamfile.close()
-
     return bed_df
 
 def filter_high_coverage_bins(bed_df, threshold=10):
@@ -147,21 +146,26 @@ def main(args):
     min_fragment_size = args.min_fragment_size
     max_fragment_size = args.max_fragment_size
     
-    concatenated_bed = concat_bed_files(bed_files)
-    extended_bed = extend_bed_regions(concatenated_bed, window=5000)
-    filtered_bed = filter_chr(extended_bed)
-    sorted_bed = human_sort_bed(filtered_bed)
-    
-    bed_pr = build_pyranges(sorted_bed)
+    combined_averages = {}
 
-    processed_bed_df = process_bam(bam_file, bed_pr, min_fragment_size, max_fragment_size)
+    for i in range(0, len(bed_files), 20):
+        batch_files = bed_files[i:i+20]
+        batch_beds = []
+        for bed_file in batch_files:
+            bed = read_bed_file(bed_file)
+            extended_bed = extend_bed_regions(bed, window=5000)
+            filtered_bed = filter_chr(extended_bed)
+            sorted_bed = human_sort_bed(filtered_bed)
+            batch_beds.append(sorted_bed)
+        
+        combined_batch_bed = pd.concat(batch_beds, ignore_index=True)
+        batch_bed_pr = build_pyranges(combined_batch_bed)
+        processed_bed_df = process_bam(bam_file, batch_bed_pr, min_fragment_size, max_fragment_size)
+        filtered_bed_df = filter_high_coverage_bins(processed_bed_df, threshold=10)
+        batch_averages = average_coverage_by_source(filtered_bed_df)
+        combined_averages.update(batch_averages)
     
-    filtered_bed_df = filter_high_coverage_bins(processed_bed_df, threshold=10)
-    
-    averaged_coverage = average_coverage_by_source(filtered_bed_df)
-    
-    smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
-    
+    smoothed_normalized_averages = smooth_and_normalize(combined_averages)
     save_averaged_coverage_to_tsv(smoothed_normalized_averages, output_file, sample_id)
 
 if __name__ == "__main__":
