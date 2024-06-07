@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 import pysam
 import numpy as np
-from intervaltree import Interval, IntervalTree
+from pyranges import PyRanges
 from scipy.signal import savgol_filter
 
 def setup_logging():
@@ -44,69 +44,64 @@ def human_sort_bed(bed):
     sorted_bed = bed.sort_values(['chrom', 1, 2])
     return sorted_bed.drop(columns='chrom')
 
-def build_interval_tree(bed):
-    """Build an interval tree from the BED dataframe."""
-    logging.info("Building interval tree from BED regions")
-    interval_trees = {f'chr{i}': IntervalTree() for i in range(1, 23)}
-    for index, row in bed.iterrows():
-        chrom = row[0]
-        start = row[1]
-        end = row[2]
-        interval_trees[chrom][start:end] = index
-    return interval_trees
+def build_pyranges(bed):
+    """Build PyRanges object from the BED dataframe."""
+    logging.info("Building PyRanges object from BED regions")
+    if bed.shape[1] > 4:
+        bed = bed.loc[:, [0, 1, 2, 'source_file']]  # Keep only the first four columns if there are more
+    bed.columns = ['Chromosome', 'Start', 'End', 'source_file']
+    pr = PyRanges(bed)
+    return pr
 
-def process_bam(bam_file, bed, interval_trees, min_fragment_size=100, max_fragment_size=200):
+def process_bam(bam_file, bed_pr, min_fragment_size, max_fragment_size):
     """Process BAM file and calculate the GC content in extended BED regions."""
     logging.info(f"Processing BAM file: {bam_file}")
-    bed['array'] = bed.apply(lambda x: np.zeros(x[2] - x[1] + 1), axis=1)
-
+    bed_df = bed_pr.df.copy()
+    bed_df['array'] = [np.zeros(end - start + 1) for start, end in zip(bed_df['Start'], bed_df['End'])]
     bamfile = pysam.AlignmentFile(bam_file, "rb")
-    read_count = 0
-    
-    for read in bamfile.fetch():
-        read_count += 1
-        if read_count % 10_000_000 == 0:
-            logging.info(f"Processed {read_count // 1_000_000}M reads")
-        
-        if not read.is_proper_pair or read.is_duplicate or read.is_supplementary:
-            continue
-        
-        if min_fragment_size <= read.template_length <= max_fragment_size:
-            midpoint = (read.reference_start + read.template_length) // 2
-            gc_value = 1 / read.get_tag('GC')
 
-            if read.reference_name in interval_trees:
-                overlaps = interval_trees[read.reference_name][midpoint]
-                for interval in overlaps:
-                    index = interval.data
-                    start = bed.at[index, 1]
-                    pos_in_array = midpoint - start
-                    bed.at[index, 'array'][pos_in_array] += gc_value
-    
+    for bed_region in bed_df.itertuples():
+        chrom = bed_region.Chromosome
+        start = bed_region.Start
+        end = bed_region.End
+        array = np.zeros(end - start + 1)  # Reset the array to zeros
+
+        for read in bamfile.fetch(chrom, start, end):
+            if not read.is_proper_pair or read.is_duplicate or read.is_supplementary:
+                continue
+            if min_fragment_size <= read.template_length <= max_fragment_size:
+                midpoint = read.reference_start + read.template_length // 2
+                gc_value = read.get_tag('GC')
+                pos_in_array = midpoint - start
+                if 0 <= pos_in_array < len(array):
+                    array[pos_in_array] += gc_value
+
+        bed_df.at[bed_region.Index, 'array'] = array  # Update the array in the DataFrame
+
     bamfile.close()
-    logging.info(f"Finished processing BAM file with {read_count} reads")
-    return bed
 
-def filter_high_coverage_bins(bed, threshold=10):
+    return bed_df
+
+def filter_high_coverage_bins(bed_df, threshold=10):
     """Filter out regions with extremely high coverage (above threshold standard deviations)."""
     logging.info(f"Filtering out regions with coverage above {threshold} standard deviations")
-    all_values = np.concatenate(bed['array'].values)
+    all_values = np.concatenate(bed_df['array'].values)
     mean = np.mean(all_values)
     std = np.std(all_values)
     cutoff = mean + threshold * std
     
-    bed['filtered_array'] = np.empty((len(bed),), dtype=object)
-    for index, row in bed.iterrows():
+    bed_df['filtered_array'] = np.empty((len(bed_df),), dtype=object)
+    for index, row in bed_df.iterrows():
         array = row['array']
         array[array > cutoff] = 0
-        bed.at[index, 'filtered_array'] = array
-    return bed
+        bed_df.at[index, 'filtered_array'] = array
+    return bed_df
 
-def average_coverage_by_source(bed):
+def average_coverage_by_source(bed_df):
     """Compute the average coverage for each source file."""
     logging.info("Computing average coverage for each source file")
     result = {}
-    for source_file, group in bed.groupby('source_file'):
+    for source_file, group in bed_df.groupby('source_file'):
         filtered_arrays = np.vstack(group['filtered_array'].values)
         avg_coverage = np.mean(filtered_arrays, axis=0)
         result[source_file] = avg_coverage
@@ -157,12 +152,13 @@ def main(args):
     filtered_bed = filter_chr(extended_bed)
     sorted_bed = human_sort_bed(filtered_bed)
     
-    interval_trees = build_interval_tree(sorted_bed)
-    processed_bed = process_bam(bam_file, sorted_bed, interval_trees, min_fragment_size, max_fragment_size)
+    bed_pr = build_pyranges(sorted_bed)
+
+    processed_bed_df = process_bam(bam_file, bed_pr, min_fragment_size, max_fragment_size)
     
-    filtered_bed = filter_high_coverage_bins(processed_bed, threshold=10)
+    filtered_bed_df = filter_high_coverage_bins(processed_bed_df, threshold=10)
     
-    averaged_coverage = average_coverage_by_source(filtered_bed)
+    averaged_coverage = average_coverage_by_source(filtered_bed_df)
     
     smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
     
