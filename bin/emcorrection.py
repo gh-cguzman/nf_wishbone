@@ -117,32 +117,35 @@ def sample_from_allowed_intervals(allowed_intervals, fragment_length):
             if start + fragment_length <= interval[1]:
                 return start
 
-def simulate_motifs(chromosome, twobit_file, fragment_min, fragment_max, num_simulations, allowed_intervals, queue):
+def simulate_motifs(chromosome, twobit_file, fragment_length_counts, observed_motifs, num_simulations, allowed_intervals, queue):
     twobit = py2bit.open(twobit_file)
     results = defaultdict(defaultdict_int)
-    fragment_length_counts = defaultdict_int()
+    fragment_length_counts_sim = defaultdict_int()
     chr_length = twobit.chroms(chromosome)
+    
+    fragment_lengths = list(fragment_length_counts.keys())
+    fragment_length_weights = list(fragment_length_counts.values())
 
     for _ in range(num_simulations):
-        fragment_length = random.randint(fragment_min, fragment_max)
+        fragment_length = random.choices(fragment_lengths, weights=fragment_length_weights, k=1)[0]
         start = sample_from_allowed_intervals(allowed_intervals, fragment_length)
-
+        
         sequence = twobit.sequence(chromosome, start, start + 4)
         
-        if 'N' not in sequence:
+        if 'N' not in sequence and sequence in observed_motifs[fragment_length]:
             results[fragment_length][sequence] += 1
-            fragment_length_counts[fragment_length] += 1
+            fragment_length_counts_sim[fragment_length] += 1
 
     twobit.close()
     
-    queue.put((results, fragment_length_counts))
+    queue.put((results, fragment_length_counts_sim))
 
-def parallel_simulate_motifs(twobit_file, chromosomes, fragment_min, fragment_max, num_simulations, num_cores, allowed_intervals_dict):
+def parallel_simulate_motifs(twobit_file, chromosomes, fragment_length_counts, observed_motifs, num_simulations, num_cores, allowed_intervals_dict):
     processes = []
     queue = multiprocessing.Queue()
     
     for chrom in chromosomes:
-        process = multiprocessing.Process(target=simulate_motifs, args=(chrom, twobit_file, fragment_min, fragment_max, num_simulations // len(chromosomes), allowed_intervals_dict[chrom], queue))
+        process = multiprocessing.Process(target=simulate_motifs, args=(chrom, twobit_file, fragment_length_counts, observed_motifs, num_simulations // len(chromosomes), allowed_intervals_dict[chrom], queue))
         processes.append(process)
     
     for process in processes:
@@ -151,9 +154,9 @@ def parallel_simulate_motifs(twobit_file, chromosomes, fragment_min, fragment_ma
     results_list = []
     fragment_length_counts_list = []
     for _ in chromosomes:
-        results, fragment_length_counts = queue.get()
+        results, fragment_length_counts_sim = queue.get()
         results_list.append(results)
-        fragment_length_counts_list.append(fragment_length_counts)
+        fragment_length_counts_list.append(fragment_length_counts_sim)
     
     for process in processes:
         process.join()
@@ -472,8 +475,10 @@ def main():
     bam_results, bam_fragment_counts = parallel_process_bam(bam_file, chromosomes, fragment_min, fragment_max, num_cores)
     logging.info(f"BAM processing complete ...")
     
+    observed_motifs = {frag_len: list(motifs.keys()) for frag_len, motifs in bam_results.items()}
+    
     logging.info(f"Simulating {num_simulations} end motifs and fragment lengths from genome ...")
-    sim_results, sim_fragment_counts = parallel_simulate_motifs(twobit_file, chromosomes, fragment_min, fragment_max, num_simulations, num_cores, allowed_intervals_dict)
+    sim_results, sim_fragment_counts = parallel_simulate_motifs(twobit_file, chromosomes, bam_fragment_counts, observed_motifs, num_simulations, num_cores, allowed_intervals_dict)
     logging.info(f"Simulations complete ...")
 
     if output_observed:

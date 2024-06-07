@@ -1,6 +1,6 @@
 process CREATE_TFBSCOV_MATRIX {
     tag "$meta.sample_id"
-    label 'process_high'
+    label 'process_low'
 
     //container = 'ghcguzman/samtools1.20'
 

@@ -66,8 +66,8 @@ def process_bam(inBam, EM_out, FEMS_out, QC_out):
         fl_tag = read.get_tag("FL") if read.has_tag("FL") else 1
 
         key = (end_motif, insert_size)
-        EM_count[end_motif] += gc_tag * em_tag * fl_tag
-        FEMS_count[key] += gc_tag * em_tag * fl_tag
+        EM_count[end_motif] += gc_tag * em_tag
+        FEMS_count[key] += gc_tag * em_tag
 
     bamfile.close()
 
