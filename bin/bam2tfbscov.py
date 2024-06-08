@@ -107,23 +107,24 @@ def write_averaged_coverage_to_tsv(output_file, sample_id, bed_file, avg_coverag
         line = [sample_id, bed_file.split('.')[0]] + list(map(str, avg_coverage))
         f.write("\t".join(line) + "\n")
 
-def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id, queue):
+def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, sample_id, queue, semaphore):
     """Worker function to process a single BED file and write the result to the output file."""
-    logging.info(f"Processing BED file: {bed_file}")
-    bed = parse_bed_file(bed_file)
-    extended_bed = extend_bed_regions(bed, window=5000)
-    filtered_bed = filter_chr(extended_bed)
-    sorted_bed = human_sort_bed(filtered_bed)
+    with semaphore:
+        logging.info(f"Processing BED file: {bed_file}")
+        bed = parse_bed_file(bed_file)
+        extended_bed = extend_bed_regions(bed, window=5000)
+        filtered_bed = filter_chr(extended_bed)
+        sorted_bed = human_sort_bed(filtered_bed)
 
-    processed_regions = process_bam(bam_file, sorted_bed, min_fragment_size, max_fragment_size)
+        processed_regions = process_bam(bam_file, sorted_bed, min_fragment_size, max_fragment_size)
 
-    filtered_regions = filter_high_coverage_bins(processed_regions, threshold=10)
+        filtered_regions = filter_high_coverage_bins(processed_regions, threshold=10)
 
-    averaged_coverage = average_coverage_by_source(filtered_regions)
+        averaged_coverage = average_coverage_by_source(filtered_regions)
 
-    smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
+        smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
 
-    queue.put((bed_file, smoothed_normalized_averages))
+        queue.put((bed_file, smoothed_normalized_averages))
 
 def main(args):
     setup_logging()
@@ -144,9 +145,10 @@ def main(args):
     print(f"Using {num_cpus} CPUs for parallelization.")
 
     queue = mp.Queue()
+    semaphore = mp.Semaphore(num_cpus)
 
     def start_worker(bed_file):
-        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id, queue))
+        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, sample_id, queue, semaphore))
         p.start()
         return p
 
