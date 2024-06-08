@@ -1,6 +1,6 @@
 process CREATE_TFBSCOV_MATRIX {
     tag "$meta.sample_id"
-    label 'process_low'
+    label 'process_high'
 
     //container = 'ghcguzman/samtools1.20'
 
@@ -27,7 +27,8 @@ process CREATE_TFBSCOV_MATRIX {
     -B $bam \\
     -b $motif_beds \\
     -o ${bam.baseName}.mat.smoothed.norm.tsv \\
-    -s ${bam.baseName}
+    -s ${bam.baseName} \\
+    -c $task.cpus
 
     tfbsmat2features.py \\
     --input ${bam.baseName}.mat.smoothed.norm.tsv \\
