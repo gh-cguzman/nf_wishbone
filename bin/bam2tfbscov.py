@@ -165,6 +165,10 @@ def main(args):
                 if not p.is_alive():
                     processes.remove(p)
 
+    # Join remaining processes
+    for p in processes:
+        p.join()
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process BAM and BED files.")
     parser.add_argument("-b", "--bed-files", nargs='+', required=True, help="List of BED files.")
