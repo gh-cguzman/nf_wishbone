@@ -139,23 +139,31 @@ def main(args):
     output_queue = mp.Queue()
     print(f"Using {num_cpus} CPUs for parallelization.")
 
+    all_averages = {}
     processes = []
 
-    for i, bed_file in enumerate(bed_files):
-        if i >= num_cpus:
-            break  # Don't create more processes than requested CPUs
-
+    def start_worker(bed_file):
         p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_queue))
         processes.append(p)
         p.start()
 
-    all_averages = {}
-    for _ in range(len(bed_files)):
-        bed_file, smoothed_normalized_averages = output_queue.get()
-        all_averages[bed_file] = smoothed_normalized_averages
+    # Start the initial batch of processes
+    for i in range(min(num_cpus, len(bed_files))):
+        start_worker(bed_files[i])
 
-    for p in processes:
-        p.join()
+    remaining_files = bed_files[num_cpus:]
+
+    while remaining_files or processes:
+        for p in processes:
+            p.join(0.1)
+            if not p.is_alive():
+                processes.remove(p)
+                if remaining_files:
+                    start_worker(remaining_files.pop(0))
+
+        while not output_queue.empty():
+            bed_file, smoothed_normalized_averages = output_queue.get()
+            all_averages[bed_file] = smoothed_normalized_averages
 
     save_averaged_coverage_to_tsv(all_averages, output_file, sample_id)
 
