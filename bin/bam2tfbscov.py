@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import argparse
 import logging
-import pandas as pd
 import pysam
 import numpy as np
 from scipy.signal import savgol_filter
@@ -11,74 +10,79 @@ def setup_logging():
     """Setup logging configuration."""
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+def parse_bed_file(bed_file):
+    """Parse BED file into a list of tuples (chrom, start, end)."""
+    regions = []
+    with open(bed_file, 'r') as f:
+        for line in f:
+            if line.startswith('track') or line.startswith('browser'):
+                continue
+            chrom, start, end = line.strip().split()[:3]
+            regions.append((chrom, int(start), int(end)))
+    return regions
+
 def extend_bed_regions(bed, window=5000):
     """Extend BED regions by ±window bp."""
-    bed[1] = bed[1] - window
-    bed[2] = bed[2] + window
-    bed[1] = bed[1].clip(lower=0)  # Ensure start is not less than 0
-    return bed
+    extended_bed = [(chrom, max(0, start - window), end + window) for chrom, start, end in bed]
+    return extended_bed
 
 def filter_chr(bed):
     """Keep only regions in chr1 to chr22."""
-    chr_filter = ['chr' + str(i) for i in range(1, 23)]
-    bed_filtered = bed[bed[0].isin(chr_filter)].copy()
-    return bed_filtered
+    chr_filter = {f'chr{i}' for i in range(1, 23)}
+    return [(chrom, start, end) for chrom, start, end in bed if chrom in chr_filter]
 
 def human_sort_bed(bed):
     """Sort BED file in human-readable order (chr1, chr2, ..., chr10, chr11, ..., chr22)."""
-    bed.loc[:, 'chrom'] = pd.Categorical(bed[0], categories=[f'chr{i}' for i in range(1, 23)], ordered=True)
-    sorted_bed = bed.sort_values(['chrom', 1, 2])
-    return sorted_bed.drop(columns='chrom')
+    chrom_order = {f'chr{i}': i for i in range(1, 23)}
+    return sorted(bed, key=lambda x: (chrom_order[x[0]], x[1], x[2]))
 
 def process_bam(bam_file, bed, min_fragment_size, max_fragment_size):
     """Process BAM file and calculate the GC content in extended BED regions."""
     logging.info(f"Processing BAM file: {bam_file}")
-    bed_df = bed.copy()
-    bed_df['array'] = [np.zeros(end - start + 1) for start, end in zip(bed_df[1], bed_df[2])]
+    regions_gc_content = []
+
     bamfile = pysam.AlignmentFile(bam_file, "rb")
 
-    for bed_region in bed_df.itertuples():
-        chrom = bed_region[1]
-        start = bed_region[2]
-        end = bed_region[3]
-        array = np.zeros(end - start + 1)  # Reset the array to zeros
+    for chrom, start, end in bed:
+        array = np.zeros(end - start + 1)  # Initialize the array to zeros
 
         for read in bamfile.fetch(chrom, start, end):
             if not read.is_proper_pair or read.is_duplicate or read.is_supplementary:
                 continue
             if min_fragment_size <= read.template_length <= max_fragment_size:
                 midpoint = read.reference_start + read.template_length // 2
-                gc_value = read.get_tag('GC')
-                pos_in_array = midpoint - start
-                if 0 <= pos_in_array < len(array):
-                    array[pos_in_array] += gc_value
+                if read.has_tag('GC'):
+                    gc_value = read.get_tag('GC')
+                    pos_in_array = midpoint - start
+                    if 0 <= pos_in_array < len(array):
+                        array[pos_in_array] += gc_value
 
-        bed_df.at[bed_region.Index, 'array'] = array  # Update the array in the DataFrame
+        regions_gc_content.append((chrom, start, end, array))
 
     bamfile.close()
 
-    return bed_df
+    return regions_gc_content
 
-def filter_high_coverage_bins(bed_df, threshold=10):
+def filter_high_coverage_bins(regions_gc_content, threshold=10):
     """Filter out regions with extremely high coverage (above threshold standard deviations)."""
     logging.info(f"Filtering out regions with coverage above {threshold} standard deviations")
-    all_values = np.concatenate(bed_df['array'].values)
+    all_values = np.concatenate([array for _, _, _, array in regions_gc_content])
     mean = np.mean(all_values)
     std = np.std(all_values)
     cutoff = mean + threshold * std
 
-    bed_df['filtered_array'] = np.empty((len(bed_df),), dtype=object)
-    for index, row in bed_df.iterrows():
-        array = row['array']
+    filtered_regions = []
+    for chrom, start, end, array in regions_gc_content:
         array[array > cutoff] = 0
-        bed_df.at[index, 'filtered_array'] = array
-    return bed_df
+        filtered_regions.append((chrom, start, end, array))
 
-def average_coverage_by_source(bed_df):
+    return filtered_regions
+
+def average_coverage_by_source(filtered_regions):
     """Compute the average coverage for each source file."""
     logging.info("Computing average coverage for each source file")
-    filtered_arrays = np.vstack(bed_df['filtered_array'].values)
-    avg_coverage = np.mean(filtered_arrays, axis=0)
+    all_arrays = np.vstack([array for _, _, _, array in filtered_regions])
+    avg_coverage = np.mean(all_arrays, axis=0)
     return avg_coverage
 
 def smooth_and_normalize(average):
@@ -103,23 +107,23 @@ def write_averaged_coverage_to_tsv(output_file, sample_id, bed_file, avg_coverag
         line = [sample_id, bed_file.split('.')[0]] + list(map(str, avg_coverage))
         f.write("\t".join(line) + "\n")
 
-def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id):
+def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id, queue):
     """Worker function to process a single BED file and write the result to the output file."""
     logging.info(f"Processing BED file: {bed_file}")
-    bed = pd.read_csv(bed_file, sep='\t', header=None, skiprows=1)
+    bed = parse_bed_file(bed_file)
     extended_bed = extend_bed_regions(bed, window=5000)
     filtered_bed = filter_chr(extended_bed)
     sorted_bed = human_sort_bed(filtered_bed)
 
-    processed_bed_df = process_bam(bam_file, sorted_bed, min_fragment_size, max_fragment_size)
+    processed_regions = process_bam(bam_file, sorted_bed, min_fragment_size, max_fragment_size)
 
-    filtered_bed_df = filter_high_coverage_bins(processed_bed_df, threshold=10)
+    filtered_regions = filter_high_coverage_bins(processed_regions, threshold=10)
 
-    averaged_coverage = average_coverage_by_source(filtered_bed_df)
+    averaged_coverage = average_coverage_by_source(filtered_regions)
 
     smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
 
-    write_averaged_coverage_to_tsv(output_file, sample_id, bed_file, smoothed_normalized_averages)
+    queue.put((bed_file, smoothed_normalized_averages))
 
 def main(args):
     setup_logging()
@@ -139,26 +143,25 @@ def main(args):
 
     print(f"Using {num_cpus} CPUs for parallelization.")
 
-    processes = []
+    queue = mp.Queue()
 
     def start_worker(bed_file):
-        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id))
-        processes.append(p)
+        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id, queue))
         p.start()
+        return p
 
-    # Start the initial batch of processes
-    for i in range(min(num_cpus, len(bed_files))):
-        start_worker(bed_files[i])
+    processes = [start_worker(bed_file) for bed_file in bed_files]
 
-    remaining_files = bed_files[num_cpus:]
-
-    while remaining_files or processes:
-        for p in processes:
-            p.join(0.1)
-            if not p.is_alive():
-                processes.remove(p)
-                if remaining_files:
-                    start_worker(remaining_files.pop(0))
+    with open(output_file, 'a') as f:
+        while any(p.is_alive() for p in processes) or not queue.empty():
+            while not queue.empty():
+                bed_file, smoothed_normalized_averages = queue.get()
+                line = [sample_id, bed_file.split('.')[0]] + list(map(str, smoothed_normalized_averages))
+                f.write("\t".join(line) + "\n")
+            for p in processes:
+                p.join(0.1)
+                if not p.is_alive():
+                    processes.remove(p)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process BAM and BED files.")
