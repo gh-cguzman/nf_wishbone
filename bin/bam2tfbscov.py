@@ -5,6 +5,7 @@ import pandas as pd
 import pysam
 import numpy as np
 from scipy.signal import savgol_filter
+import multiprocessing as mp
 
 def setup_logging():
     """Setup logging configuration."""
@@ -65,7 +66,7 @@ def filter_high_coverage_bins(bed_df, threshold=10):
     mean = np.mean(all_values)
     std = np.std(all_values)
     cutoff = mean + threshold * std
-    
+
     bed_df['filtered_array'] = np.empty((len(bed_df),), dtype=object)
     for index, row in bed_df.iterrows():
         array = row['array']
@@ -101,40 +102,61 @@ def save_averaged_coverage_to_tsv(averages, output_file, sample_id):
     with open(output_file, 'w') as f:
         header = ["Sample_ID", "BED_File"] + [str(i) for i in range(-1000, 1001)]
         f.write("\t".join(header) + "\n")
-        
+
         for bed_file, avg_coverage in averages.items():
             line = [sample_id, bed_file.split('.')[0]] + list(map(str, avg_coverage))
             f.write("\t".join(line) + "\n")
 
+def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output_queue):
+    """Worker function to process a single BED file."""
+    logging.info(f"Processing BED file: {bed_file}")
+    bed = pd.read_csv(bed_file, sep='\t', header=None, skiprows=1)
+    extended_bed = extend_bed_regions(bed, window=5000)
+    filtered_bed = filter_chr(extended_bed)
+    sorted_bed = human_sort_bed(filtered_bed)
+
+    processed_bed_df = process_bam(bam_file, sorted_bed, min_fragment_size, max_fragment_size)
+
+    filtered_bed_df = filter_high_coverage_bins(processed_bed_df, threshold=10)
+
+    averaged_coverage = average_coverage_by_source(filtered_bed_df)
+
+    smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
+
+    output_queue.put((bed_file, smoothed_normalized_averages))
+
 def main(args):
     setup_logging()
-    
+
     bed_files = args.bed_files
     bam_file = args.bam_file
     output_file = args.output_file
     sample_id = args.sample_id
     min_fragment_size = args.min_fragment_size
     max_fragment_size = args.max_fragment_size
-    
-    all_averages = {}
+    num_cpus = args.num_cpus
 
-    for bed_file in bed_files:
-        logging.info(f"Processing BED file: {bed_file}")
-        bed = pd.read_csv(bed_file, sep='\t', header=None, skiprows=1)
-        extended_bed = extend_bed_regions(bed, window=5000)
-        filtered_bed = filter_chr(extended_bed)
-        sorted_bed = human_sort_bed(filtered_bed)
-    
-        processed_bed_df = process_bam(bam_file, sorted_bed, min_fragment_size, max_fragment_size)
-    
-        filtered_bed_df = filter_high_coverage_bins(processed_bed_df, threshold=10)
-    
-        averaged_coverage = average_coverage_by_source(filtered_bed_df)
-    
-        smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
-    
+    output_queue = mp.Queue()
+    print(f"Using {num_cpus} CPUs for parallelization.")
+
+    processes = []
+
+    for i, bed_file in enumerate(bed_files):
+        if i >= num_cpus:
+            break  # Don't create more processes than requested CPUs
+
+        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_queue))
+        processes.append(p)
+        p.start()
+
+    all_averages = {}
+    for _ in range(len(bed_files)):
+        bed_file, smoothed_normalized_averages = output_queue.get()
         all_averages[bed_file] = smoothed_normalized_averages
-    
+
+    for p in processes:
+        p.join()
+
     save_averaged_coverage_to_tsv(all_averages, output_file, sample_id)
 
 if __name__ == "__main__":
@@ -145,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("-s", "--sample-id", required=True, help="Sample ID.")
     parser.add_argument("-m", "--min-fragment-size", type=int, default=110, help="Minimum fragment size.")
     parser.add_argument("-M", "--max-fragment-size", type=int, default=230, help="Maximum fragment size.")
-    
+    parser.add_argument("-c", "--num-cpus", type=int, default=1, help="Number of CPUs to use for parallelization.")
+
     args = parser.parse_args()
     main(args)
