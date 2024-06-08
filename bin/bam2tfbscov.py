@@ -96,19 +96,15 @@ def smooth_and_normalize(average):
         filtered_array = np.zeros(2001) # In case of invalid data
     return filtered_array
 
-def save_averaged_coverage_to_tsv(averages, output_file, sample_id):
-    """Save the averaged coverage data to a TSV file."""
-    logging.info(f"Saving averaged coverage to TSV file: {output_file}")
-    with open(output_file, 'w') as f:
-        header = ["Sample_ID", "BED_File"] + [str(i) for i in range(-1000, 1001)]
-        f.write("\t".join(header) + "\n")
+def write_averaged_coverage_to_tsv(output_file, sample_id, bed_file, avg_coverage):
+    """Append the averaged coverage data to a TSV file."""
+    logging.info(f"Writing averaged coverage to TSV file: {output_file}")
+    with open(output_file, 'a') as f:
+        line = [sample_id, bed_file.split('.')[0]] + list(map(str, avg_coverage))
+        f.write("\t".join(line) + "\n")
 
-        for bed_file, avg_coverage in averages.items():
-            line = [sample_id, bed_file.split('.')[0]] + list(map(str, avg_coverage))
-            f.write("\t".join(line) + "\n")
-
-def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output_queue):
-    """Worker function to process a single BED file."""
+def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id):
+    """Worker function to process a single BED file and write the result to the output file."""
     logging.info(f"Processing BED file: {bed_file}")
     bed = pd.read_csv(bed_file, sep='\t', header=None, skiprows=1)
     extended_bed = extend_bed_regions(bed, window=5000)
@@ -123,7 +119,7 @@ def worker_func(bed_file, bam_file, min_fragment_size, max_fragment_size, output
 
     smoothed_normalized_averages = smooth_and_normalize(averaged_coverage)
 
-    output_queue.put((bed_file, smoothed_normalized_averages))
+    write_averaged_coverage_to_tsv(output_file, sample_id, bed_file, smoothed_normalized_averages)
 
 def main(args):
     setup_logging()
@@ -136,14 +132,17 @@ def main(args):
     max_fragment_size = args.max_fragment_size
     num_cpus = args.num_cpus
 
-    output_queue = mp.Queue()
+    # Create the output file and write the header
+    with open(output_file, 'w') as f:
+        header = ["Sample_ID", "BED_File"] + [str(i) for i in range(-1000, 1001)]
+        f.write("\t".join(header) + "\n")
+
     print(f"Using {num_cpus} CPUs for parallelization.")
 
-    all_averages = {}
     processes = []
 
     def start_worker(bed_file):
-        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_queue))
+        p = mp.Process(target=worker_func, args=(bed_file, bam_file, min_fragment_size, max_fragment_size, output_file, sample_id))
         processes.append(p)
         p.start()
 
@@ -160,12 +159,6 @@ def main(args):
                 processes.remove(p)
                 if remaining_files:
                     start_worker(remaining_files.pop(0))
-
-        while not output_queue.empty():
-            bed_file, smoothed_normalized_averages = output_queue.get()
-            all_averages[bed_file] = smoothed_normalized_averages
-
-    save_averaged_coverage_to_tsv(all_averages, output_file, sample_id)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Process BAM and BED files.")
