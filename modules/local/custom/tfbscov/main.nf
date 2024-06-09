@@ -27,8 +27,7 @@ process CREATE_TFBSCOV_MATRIX {
     -B $bam \\
     -b $motif_beds \\
     -o ${bam.baseName}.mat.smoothed.norm.tsv \\
-    -s ${bam.baseName} \\
-    -c $task.cpus
+    -s ${bam.baseName}
 
     tfbsmat2features.py \\
     --input ${bam.baseName}.mat.smoothed.norm.tsv \\
