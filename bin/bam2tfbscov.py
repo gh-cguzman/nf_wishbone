@@ -212,13 +212,19 @@ def main(bam_file, bed_files, sample_id, output_file, extension_size=5000, batch
         extended_bed = concatenate_and_process_bed_files(bed_file_batch, extension_size)
         
         coverage_dict = process_bam_file(bam_file, extended_bed)
-        gc.collect()  # Collect garbage to free up memory
+        #gc.collect()  # Collect garbage to free up memory
         
         filtered_coverage_dict = filter_high_coverage(coverage_dict)
-        gc.collect()  # Collect garbage to free up memory
+        #gc.collect()  # Collect garbage to free up memory
         
         mean_profiles = compute_mean_profiles(extended_bed, filtered_coverage_dict)
         all_mean_profiles.append(mean_profiles)
+
+        # Delete intermediate variables to free memory
+        del extended_bed
+        del coverage_dict
+        del filtered_coverage_dict
+        gc.collect()
 
     # Combine mean profiles from all batches
     combined_mean_profiles = combine_mean_profiles(all_mean_profiles)
