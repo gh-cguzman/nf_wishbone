@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.fft import fft
+from scipy.signal import find_peaks
 import logging
 import os
 
@@ -33,39 +34,57 @@ def calculate_features(df, plot_dir):
         central_coverage_start = max(center_index - 50, 0)
         central_coverage_end = min(center_index + 51, len(coverage))
         central_coverage = np.mean(coverage[central_coverage_start: central_coverage_end])
-        #logging.info(f"Calculated central coverage for {sample_id}")
-
+        
         # Mean coverage
         mean_coverage_start = max(center_index - 1000, 0)
         mean_coverage_end = min(center_index + 1001, len(coverage))
         mean_coverage = np.mean(coverage[mean_coverage_start: mean_coverage_end])
-        #logging.info(f"Calculated mean coverage for {sample_id}")
 
         # Amplitude (using Fast Fourier Transform)
         fft_start = max(center_index - 960, 0)
         fft_end = min(center_index + 961, len(coverage))
         fft_result = np.abs(fft(coverage[fft_start: fft_end]))
         amplitude = fft_result[10]
-        #logging.info(f"Calculated FFT amplitude for {sample_id}")
 
         # Global maxima and minima within +/- 250 bp regions
-        region_start = max(center_index - 200, 0)
-        region_end = min(center_index + 201, len(coverage))
+        peaks, _ = find_peaks(coverage, prominence=0.01)
+        troughs, _ = find_peaks(-coverage, prominence=0.02)
 
-        right_region = coverage[center_index:region_end]
-        left_region = coverage[region_start:center_index][::-1]
+        # Global maxima and minima right
+        global_maxima_right = np.nan
+        global_minima_right = np.nan
+        for peak in peaks:
+            if peak > center_index:
+                global_maxima_right = positions[peak]
+                break
+        for trough in troughs:
+            if trough > center_index:
+                global_minima_right = positions[trough]
+                break
 
-        global_maxima_right = np.nan if len(right_region) == 0 else np.argmax(right_region)
-        global_minima_right = np.nan if len(right_region) == 0 else np.argmin(right_region)
-        global_maxima_left = np.nan if len(left_region) == 0 else np.argmax(left_region)
-        global_minima_left = np.nan if len(left_region) == 0 else np.argmin(left_region)
+        # Global maxima and minima left
+        global_maxima_left = np.nan
+        global_minima_left = np.nan
+        for peak in reversed(peaks):
+            if peak < center_index:
+                global_maxima_left = positions[peak]
+                break
+        for trough in reversed(troughs):
+            if trough < center_index:
+                global_minima_left = positions[trough]
+                break
+
+        # Calculate wavelength
+        if len(peaks) > 1:
+            wavelengths = np.diff(peaks)
+            average_wavelength = np.mean(wavelengths)
+        else:
+            average_wavelength = 0
 
         features.append([sample_id, bed_file, central_coverage, mean_coverage, amplitude,
                          global_maxima_right, global_maxima_left,
-                         global_minima_right, global_minima_left])
+                         global_minima_right, global_minima_left, average_wavelength])
         
-        #logging.info(f"Calculated global maxima and minima for {sample_id}")
-
         # Plotting Coverage Profile
         plt.figure(figsize=(5, 5))
         plt.plot(positions, coverage, label="Coverage", linewidth=3, color='lightblue')
@@ -74,16 +93,16 @@ def calculate_features(df, plot_dir):
         plt.axvline(x=positions[mean_coverage_start], color='darkred', linestyle='--', label="Mean Coverage Region Start")
         plt.axvline(x=positions[mean_coverage_end-1], color='darkred', linestyle='--', label="Mean Coverage Region End")
         if not np.isnan(global_maxima_right):
-            plt.plot(positions[center_index + global_maxima_right], coverage[center_index + global_maxima_right], 'go', label="Global Maxima Right", markersize=10)
+            plt.plot(global_maxima_right, coverage[positions == global_maxima_right], 'go', label="+1 Nuc (Peak)", markersize=10)
         if not np.isnan(global_maxima_left):
-            plt.plot(positions[center_index - global_maxima_left], coverage[center_index - global_maxima_left], 'bo', label="Global Maxima Left", markersize=10)
+            plt.plot(global_maxima_left, coverage[positions == global_maxima_left], 'bo', label="-1 Nuc (Peak)", markersize=10)
         if not np.isnan(global_minima_right):
-            plt.plot(positions[center_index + global_minima_right], coverage[center_index + global_minima_right], 'ro', label="Global Minima Right", markersize=10)
+            plt.plot(global_minima_right, coverage[positions == global_minima_right], 'ro', label="+1 Nuc (Valley)", markersize=10)
         if not np.isnan(global_minima_left):
-            plt.plot(positions[center_index - global_minima_left], coverage[center_index - global_minima_left], 'mo', label="Global Minima Left", markersize=10)
+            plt.plot(global_minima_left, coverage[positions == global_minima_left], 'mo', label="-1 Nuc (Valley)", markersize=10)
         plt.xlabel("Genomic Position (relative to center)")
-        plt.ylabel("Coverage")
-        plt.title(f"Coverage Profile for {sample_id}, {bed_file}")
+        plt.ylabel("Normalized Coverage")
+        plt.title(f"Coverage Profile for {sample_id} (Feature: {bed_file})")
         plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
         plt.grid(False)
         os.makedirs(plot_dir, exist_ok=True)
@@ -105,8 +124,8 @@ def calculate_features(df, plot_dir):
         logging.info(f"Saved FFT plot for {sample_id}")
 
     return pd.DataFrame(features, columns=['Sample_ID', 'BED_File', 'Central_Coverage', 'Mean_Coverage', 'Amplitude',
-                                           'Distance_Global_Maxima_Right', 'Distance_Global_Maxima_Left',
-                                           'Distance_Global_Minima_Right', 'Distance_Global_Minima_Left'])
+                                           'Global_Maxima_Right', 'Global_Maxima_Left',
+                                           'Global_Minima_Right', 'Global_Minima_Left', 'Wavelength'])
 
 def main():
     args = parse_arguments()

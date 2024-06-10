@@ -70,7 +70,8 @@ workflow WISHBONE {
         EMCORRECTION(
             GCPARAGON.out.bam_bai,
             ch_2bit,
-            ch_blacklist
+            ch_blacklist,
+            ch_regions
         )
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )
@@ -85,7 +86,8 @@ workflow WISHBONE {
         EMCORRECTION(
             SAMTOOLS_INDEX_ONE.out.bam_bai,
             ch_2bit,
-            ch_blacklist
+            ch_blacklist,
+            ch_regions
         )
 
         SAMTOOLS_INDEX_TWO( EMCORRECTION.out.bam )

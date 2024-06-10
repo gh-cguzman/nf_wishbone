@@ -43,20 +43,19 @@ def process_read(read, fragment_min, fragment_max):
     
     return None
 
-def process_region(region, bam_file, fragment_min, fragment_max, queue):
-    chrom, start, end = region
+def process_chromosome(chromosome, bam_file, fragment_min, fragment_max, queue):
     bam = pysam.AlignmentFile(bam_file, "rb")
     results = defaultdict(defaultdict_int)
     fragment_length_counts = defaultdict_int()
     
-    for read in bam.fetch(chrom, start, end):
+    for read in bam.fetch(chromosome):
         result = process_read(read, fragment_min, fragment_max)
         if result:
             fragment_length, end_motif = result
             results[fragment_length][end_motif] += 1
             fragment_length_counts[fragment_length] += 1
     
-    queue.put((results, fragment_length_counts, f"{chrom}:{start}-{end}"))
+    queue.put((results, fragment_length_counts))
 
 def merge_results(results_list):
     merged = defaultdict(defaultdict_int)
@@ -73,31 +72,31 @@ def merge_counts(counts_list):
             merged[fragment_length] += number
     return merged
 
-def parallel_process_bam(bam_file, regions, fragment_min, fragment_max, num_cores):
+def parallel_process_bam(bam_file, chromosomes, fragment_min, fragment_max, num_cores):
+    processes = []
     queue = multiprocessing.Queue()
 
-    results_dict = {}
-    fragment_length_counts_dict = {}
-    region_count = 0
+    for chrom in chromosomes:
+        process = multiprocessing.Process(target=process_chromosome, args=(chrom, bam_file, fragment_min, fragment_max, queue))
+        processes.append(process)
+    
+    for process in processes:
+        process.start()
+    
+    results_list = []
+    fragment_length_counts_list = []
+    for _ in chromosomes:
+        results, fragment_length_counts = queue.get()
+        results_list.append(results)
+        fragment_length_counts_list.append(fragment_length_counts)
+    
+    for process in processes:
+        process.join()
 
-    for i in range(0, len(regions), num_cores):
-        batch = regions[i:i + num_cores]
-        region_count += len(batch)
-        print("processing observed counts for regions", region_count)
-        processes = [multiprocessing.Process(target=process_region, args=(region, bam_file, fragment_min, fragment_max, queue)) for region in batch]
-
-        for process in processes:
-            process.start()
-        
-        for _ in batch:
-            results, fragment_length_counts, region_id = queue.get()
-            results_dict[region_id] = results
-            fragment_length_counts_dict[region_id] = fragment_length_counts
-        
-        for process in processes:
-            process.join()
-
-    return results_dict, fragment_length_counts_dict
+    motif_results = merge_results(results_list)
+    fragment_length_counts = merge_counts(fragment_length_counts_list)
+    
+    return motif_results, fragment_length_counts
 
 def compute_allowed_intervals(chr_length, blacklist_tree):
     allowed_intervals = []
@@ -118,61 +117,54 @@ def sample_from_allowed_intervals(allowed_intervals, fragment_length):
             if start + fragment_length <= interval[1]:
                 return start
 
-def flatten_fragment_length_counts(fragment_length_counts):
-    flattened_counts = defaultdict_int()
-    for region_counts in fragment_length_counts.values():
-        for fragment_length, count in region_counts.items():
-            flattened_counts[fragment_length] += count
-    return flattened_counts
-
-def simulate_motifs_region(region, twobit_file, region_fragment_length_counts, observed_motifs, num_simulations, allowed_intervals, queue):
-    chrom, start, end = region
+def simulate_motifs(chromosome, twobit_file, fragment_length_counts, observed_motifs, num_simulations, allowed_intervals, queue):
     twobit = py2bit.open(twobit_file)
     results = defaultdict(defaultdict_int)
     fragment_length_counts_sim = defaultdict_int()
-
-    fragment_length_counts = flatten_fragment_length_counts(region_fragment_length_counts)
+    chr_length = twobit.chroms(chromosome)
+    
     fragment_lengths = list(fragment_length_counts.keys())
-    fragment_length_weights = [fragment_length_counts[fl] for fl in fragment_lengths]
+    fragment_length_weights = list(fragment_length_counts.values())
 
     for _ in range(num_simulations):
         fragment_length = random.choices(fragment_lengths, weights=fragment_length_weights, k=1)[0]
-        region_start = random.randint(start, end - fragment_length)
-        sequence = twobit.sequence(chrom, region_start, region_start + 4)
+        start = sample_from_allowed_intervals(allowed_intervals, fragment_length)
         
-        if 'N' not in sequence and sequence in observed_motifs.get(fragment_length, []):
+        sequence = twobit.sequence(chromosome, start, start + 4)
+        
+        if 'N' not in sequence and sequence in observed_motifs[fragment_length]:
             results[fragment_length][sequence] += 1
             fragment_length_counts_sim[fragment_length] += 1
 
     twobit.close()
     
-    queue.put((results, fragment_length_counts_sim, f"{chrom}:{start}-{end}"))
+    queue.put((results, fragment_length_counts_sim))
 
-def parallel_simulate_motifs(twobit_file, regions, fragment_length_counts, observed_motifs, num_simulations, num_cores, allowed_intervals_dict):
+def parallel_simulate_motifs(twobit_file, chromosomes, fragment_length_counts, observed_motifs, num_simulations, num_cores, allowed_intervals_dict):
+    processes = []
     queue = multiprocessing.Queue()
     
-    sim_results_dict = {}
-    sim_fragment_length_counts_dict = {}
-    region_count = 0
+    for chrom in chromosomes:
+        process = multiprocessing.Process(target=simulate_motifs, args=(chrom, twobit_file, fragment_length_counts, observed_motifs, num_simulations // len(chromosomes), allowed_intervals_dict[chrom], queue))
+        processes.append(process)
+    
+    for process in processes:
+        process.start()
+    
+    results_list = []
+    fragment_length_counts_list = []
+    for _ in chromosomes:
+        results, fragment_length_counts_sim = queue.get()
+        results_list.append(results)
+        fragment_length_counts_list.append(fragment_length_counts_sim)
+    
+    for process in processes:
+        process.join()
 
-    for i in range(0, len(regions), num_cores):
-        batch = regions[i:i + num_cores]
-        region_count += len(batch)
-        print("processing expected counts for regions", region_count)
-        processes = [multiprocessing.Process(target=simulate_motifs_region, args=(region, twobit_file, fragment_length_counts, observed_motifs, num_simulations // len(regions), allowed_intervals_dict[region[0]], queue)) for region in batch]
+    motif_results = merge_results(results_list)
+    fragment_length_counts = merge_counts(fragment_length_counts_list)
 
-        for process in processes:
-            process.start()
-        
-        for _ in batch:
-            results, fragment_length_counts_sim, region_id = queue.get()
-            sim_results_dict[region_id] = results
-            sim_fragment_length_counts_dict[region_id] = fragment_length_counts_sim
-        
-        for process in processes:
-            process.join()
-
-    return sim_results_dict, sim_fragment_length_counts_dict
+    return motif_results, fragment_length_counts
 
 def load_blacklist(bed_file):
     blacklist_trees = defaultdict(IntervalTree)
@@ -194,21 +186,12 @@ def precompute_allowed_intervals(chromosomes, twobit_file, blacklist_trees):
     twobit.close()
     return allowed_intervals_dict
 
-def load_1mb_regions(bed_file):
-    regions = []
-    with open(bed_file, 'r') as f:
-        for line in f:
-            parts = line.strip().split()
-            chrom, start, end = parts[0], int(parts[1]), int(parts[2])
-            regions.append((chrom, start, end))
-    return regions
-
 def calculate_simple_weights(observed, expected):
-    weights = defaultdict(partial(defaultdict, float))
+    weights = collections.defaultdict(partial(collections.defaultdict, float))
     for frag_length in observed:
         for motif in observed[frag_length]:
             obs_count = observed[frag_length][motif]
-            exp_count = expected.get(frag_length, {}).get(motif, 0)
+            exp_count = expected[frag_length].get(motif, 0)
             if obs_count <= 20 or exp_count <= 20:
                 weights[frag_length][motif] = 1
             else:
@@ -270,31 +253,6 @@ def write_fragment_weights_to_tsv(weights, filename):
         for frag_length, weight in sorted(weights.items()):
             f.write(f"{frag_length}\t{weight}\n")
 
-def write_weights_to_tsv_by_region(weights_by_region, filename):
-    with open(filename, 'w') as f:
-        f.write("Region\tFragmentLength\tMotif\tWeight\n")
-        for region in sorted(weights_by_region.keys()):
-            for frag_length in sorted(weights_by_region[region].keys()):
-                for motif, weight in sorted(weights_by_region[region][frag_length].items()):
-                    f.write(f"{region}\t{frag_length}\t{motif}\t{weight}\n")
-
-def write_fragment_weights_to_tsv_by_region(weights_by_region, filename):
-    with open(filename, 'w') as f:
-        f.write("Region\tFragmentLength\tWeight\n")
-        for region in sorted(weights_by_region.keys()):
-            for frag_length, weight in sorted(weights_by_region[region].items()):
-                f.write(f"{region}\t{frag_length}\t{weight}\n")
-
-def limit_extreme_weights_by_region(weights_by_region, sod):
-    for region in weights_by_region:
-        weights_by_region[region] = limit_extreme_weights(weights_by_region[region], sod)
-    return weights_by_region
-
-def limit_extreme_fragment_weights_by_region(weights_by_region, sod):
-    for region in weights_by_region:
-        weights_by_region[region] = limit_extreme_fragment_weights(weights_by_region[region], sod)
-    return weights_by_region
-
 def limit_extreme_weights(weights, sod):
     fs = 10 - sod
     non_default_weights = [weight for frag_length in weights for weight in weights[frag_length].values() if weight != 1]
@@ -330,17 +288,8 @@ def limit_extreme_fragment_weights(weights, sod):
     
     return weights
 
-def smooth_weights_by_region(weights_by_region, sigma):
-    for region in weights_by_region:
-        weights_by_region[region] = smooth_weights(weights_by_region[region], sigma)
-    return weights_by_region
-
-def smooth_fragment_weights_by_region(weights_by_region, sigma):
-    for region in weights_by_region:
-        weights_by_region[region] = smooth_fragment_weights(weights_by_region[region], sigma)
-    return weights_by_region
-
 def smooth_weights(weights, sigma):
+
     motif_to_index, index_to_motif = create_motif_index_mapping(weights)
     max_frag_length = max(weights.keys())
     max_motif_index = max(motif_to_index.values())
@@ -360,6 +309,7 @@ def smooth_weights(weights, sigma):
     return smoothed_weights
 
 def smooth_fragment_weights(weights, sigma):
+
     max_frag_length = max(weights.keys())
     weight_array = np.zeros(max_frag_length + 1)
 
@@ -382,7 +332,7 @@ def create_motif_index_mapping(weights):
     index_to_motif = {i: motif for motif, i in motif_to_index.items()}
     return motif_to_index, index_to_motif
 
-def add_tags_to_read(read, motif_weights, fragment_weights, region_tree):
+def add_tags_to_read(read, motif_weights, fragment_weights):
     fragment_length = read.template_length
     if read.flag in (99, 163):
         end_motif = read.query_sequence[:4]
@@ -391,20 +341,13 @@ def add_tags_to_read(read, motif_weights, fragment_weights, region_tree):
     else:
         end_motif = "NNNN"  # Handle unexpected cases
     
-    region_intervals = region_tree[read.reference_name].overlap(read.reference_start, read.reference_start + 1)
-    if region_intervals:
-        region = next(iter(region_intervals)).data
-        em_weight = motif_weights.get(region, {}).get(fragment_length, {}).get(end_motif, 1.0)
-        fl_weight = fragment_weights.get(region, {}).get(fragment_length, 1.0)
-    else:
-        em_weight = 1.0
-        fl_weight = 1.0
-
+    em_weight = motif_weights.get(fragment_length, {}).get(end_motif, 1.0)
+    fl_weight = fragment_weights.get(fragment_length, 1.0)
     read.set_tag("EM", em_weight)
     read.set_tag("FL", fl_weight)
     return read
 
-def process_chromosome_with_tags(chromosome, bam_file, motif_weights, fragment_weights, fragment_min, fragment_max, tmp_dir, conn, region_tree):
+def process_chromosome_with_tags(chromosome, bam_file, motif_weights, fragment_weights, fragment_min, fragment_max, tmp_dir, conn):
     logging.info(f"Processing chromosome: {chromosome}")
     bam_in = pysam.AlignmentFile(bam_file, "rb")
     tagged_bam_file = os.path.join(tmp_dir, f"{chromosome}_tagged.bam")
@@ -417,7 +360,7 @@ def process_chromosome_with_tags(chromosome, bam_file, motif_weights, fragment_w
             fragment_min <= read.template_length <= fragment_max and
             'N' not in read.query_sequence[:4]):
             
-            read = add_tags_to_read(read, motif_weights, fragment_weights, region_tree)
+            read = add_tags_to_read(read, motif_weights, fragment_weights)
             bam_out.write(read)
 
     bam_in.close()
@@ -455,13 +398,13 @@ def sort_and_merge_bam_files(output_bam_file, tmp_dir, num_chromosomes, pipes, n
     
     logging.info(f"Finished sorting and merging BAM files into {output_bam_file}")
 
-def parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif_weights, fragment_weights, fragment_min, fragment_max, num_cores, tmp_dir, region_tree):
+def parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif_weights, fragment_weights, fragment_min, fragment_max, num_cores, tmp_dir):
     processes = []
     parent_conns = []
     
     for chromosome in chromosomes:
         parent_conn, child_conn = multiprocessing.Pipe()
-        p = multiprocessing.Process(target=process_chromosome_with_tags, args=(chromosome, bam_file, motif_weights, fragment_weights, fragment_min, fragment_max, tmp_dir, child_conn, region_tree))
+        p = multiprocessing.Process(target=process_chromosome_with_tags, args=(chromosome, bam_file, motif_weights, fragment_weights, fragment_min, fragment_max, tmp_dir, child_conn))
         processes.append(p)
         parent_conns.append(parent_conn)
         p.start()
@@ -473,28 +416,6 @@ def parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif
         p.join()
 
     merger_process.join()
-
-def calculate_weights_by_region(observed_results, expected_results):
-    weights_by_region = {}
-    for region in observed_results:
-        observed = observed_results[region]
-        expected = expected_results.get(region, {})
-        weights_by_region[region] = calculate_simple_weights(observed, expected)
-    return weights_by_region
-
-def calculate_fragment_weights_by_region(observed_fragment_counts, expected_fragment_counts):
-    weights_by_region = {}
-    for region in observed_fragment_counts:
-        observed = observed_fragment_counts[region]
-        expected = expected_fragment_counts.get(region, {})
-        weights_by_region[region] = calculate_simple_fragment_weights(observed, expected)
-    return weights_by_region
-
-def build_region_tree(regions):
-    region_tree = defaultdict(IntervalTree)
-    for chrom, start, end in regions:
-        region_tree[chrom].add(Interval(start, end, data=f"{chrom}:{start}-{end}"))
-    return region_tree
 
 def main():
     parser = argparse.ArgumentParser(description='Process BAM file for 5\'-end motif bias correction and simulate end motifs from genome.')
@@ -512,12 +433,11 @@ def main():
     parser.add_argument('-l', '--log', type=str, default="process.log", help='Log file (default: process.log)')
     parser.add_argument('-n', '--num-cores', type=int, default=multiprocessing.cpu_count(), help='Number of CPU cores to use (default: all available cores)')
     parser.add_argument('-t', '--twobit', type=str, required=True, help='2bit file of the reference genome')
-    parser.add_argument('-s', '--num-simulations', type=int, default=270000000, help='Number of simulations to perform (default: 270M)')
+    parser.add_argument('-s', '--num-simulations', type=int, default=200000000, help='Number of simulations to perform (default: 200M)')
     parser.add_argument('-b', '--blacklist', type=str, required=True, help='BED file with blacklisted regions')
     parser.add_argument('-sod', '--stringency', type=int, default=3, help='Outlier detection stringency (default: 3)')
     parser.add_argument('-sg', '--smoothing-sigma', type=float, default=2.0, help='Sigma for Gaussian smoothing (default: 2.0)')
     parser.add_argument('-obam', '--output-bam', type=str, help='Output BAM file with added tags')
-    parser.add_argument('-r', '--region-bed', type=str, required=True, help='BED file with preselected 1Mb regions')
 
     args = parser.parse_args()
 
@@ -539,7 +459,6 @@ def main():
     num_simulations = args.num_simulations
     blacklist_file = args.blacklist
     output_bam_file = args.output_bam
-    region_bed = args.region_bed
 
     tmp_dir = "tmp_bam_dir"
     os.makedirs(tmp_dir, exist_ok=True)
@@ -552,68 +471,67 @@ def main():
     allowed_intervals_dict = precompute_allowed_intervals(chromosomes, twobit_file, blacklist_trees)
     logging.info(f"Allowed intervals precomputed ...")
 
-    logging.info(f"Loading 1Mb regions from BED file: {region_bed} ...")
-    regions = load_1mb_regions(region_bed)
-    logging.info(f"1Mb regions loaded ...")
-
     logging.info(f"Processing file: {bam_file} ...")
-    observed_results, observed_fragment_counts = parallel_process_bam(bam_file, regions, fragment_min, fragment_max, num_cores)
+    bam_results, bam_fragment_counts = parallel_process_bam(bam_file, chromosomes, fragment_min, fragment_max, num_cores)
     logging.info(f"BAM processing complete ...")
     
-    # Collect all motifs observed in the regions
-    observed_motifs = defaultdict(set)
-    for region, region_data in observed_results.items():
-        #print(f"Processing region: {region}")
-        for frag_len, motifs in region_data.items():
-            #print(f"region: {region}, frag_len: {frag_len}, motifs: {motifs}")
-            if isinstance(motifs, dict):
-                observed_motifs[frag_len].update(motifs.keys())
-            else:
-                print(f"Unexpected data type for motifs: {type(motifs)} in region: {region}, frag_len: {frag_len}")
-    observed_motifs = {frag_len: list(motifs) for frag_len, motifs in observed_motifs.items()}
+    observed_motifs = {frag_len: list(motifs.keys()) for frag_len, motifs in bam_results.items()}
     
     logging.info(f"Simulating {num_simulations} end motifs and fragment lengths from genome ...")
-    expected_results, expected_fragment_counts = parallel_simulate_motifs(twobit_file, regions, observed_fragment_counts, observed_motifs, num_simulations, num_cores, allowed_intervals_dict)
+    sim_results, sim_fragment_counts = parallel_simulate_motifs(twobit_file, chromosomes, bam_fragment_counts, observed_motifs, num_simulations, num_cores, allowed_intervals_dict)
     logging.info(f"Simulations complete ...")
 
     if output_observed:
-        write_weights_to_tsv_by_region(observed_results, output_observed)
+        with open(output_observed, 'w') as f_obs:
+            f_obs.write("FragLength\tEndMotif\tCount\n")
+            for fragment_length, motifs in sorted(bam_results.items()):
+                for motif, count in sorted(motifs.items()):
+                    f_obs.write(f"{fragment_length}\t{motif}\t{count}\n")
     
     if output_fragment_observed:
-        write_fragment_weights_to_tsv_by_region(observed_fragment_counts, output_fragment_observed)
+        with open(output_fragment_observed, 'w') as f_frag_obs:
+            f_frag_obs.write("FragLength\tCount\n")
+            for fragment_length, count in sorted(bam_fragment_counts.items()):
+                f_frag_obs.write(f"{fragment_length}\t{count}\n")
     
     if output_expected:
-        write_weights_to_tsv_by_region(expected_results, output_expected)
+        with open(output_expected, 'w') as f_exp:
+            f_exp.write("FragLength\tEndMotif\tCount\n")
+            for fragment_length, motifs in sorted(sim_results.items()):
+                for motif, count in sorted(motifs.items()):
+                    f_exp.write(f"{fragment_length}\t{motif}\t{count}\n")
     
     if output_fragment_expected:
-        write_fragment_weights_to_tsv_by_region(expected_fragment_counts, output_fragment_expected)
+        with open(output_fragment_expected, 'w') as f_frag_exp:
+            f_frag_exp.write("FragLength\tCount\n")
+            for fragment_length, count in sorted(sim_fragment_counts.items()):
+                f_frag_exp.write(f"{fragment_length}\t{count}\n")
     
-    logging.info("Calculating region-specific correction weights ...")
     if correction_method == 'simple':
-        motif_weights = calculate_weights_by_region(observed_results, expected_results)
-        fragment_weights = calculate_fragment_weights_by_region(observed_fragment_counts, expected_fragment_counts)
+        logging.info("Calculating simple correction weights ...")
+        motif_weights = calculate_simple_weights(bam_results, sim_results)
+        fragment_weights = calculate_simple_fragment_weights(bam_fragment_counts, sim_fragment_counts)
     elif correction_method == 'glm':
-        # Implement GLM-based weights if needed
-        pass
-
+        logging.info("Calculating GLM correction weights ...")
+        motif_weights = calculate_glm_weights(bam_results, sim_results)
+        fragment_weights = calculate_glm_fragment_weights(bam_fragment_counts, sim_fragment_counts)
+    
     logging.info("Applying extreme weight limitation ...")
-    motif_weights = limit_extreme_weights_by_region(motif_weights, args.stringency)
-    fragment_weights = limit_extreme_fragment_weights_by_region(fragment_weights, args.stringency)
+    motif_weights = limit_extreme_weights(motif_weights, args.stringency)
+    fragment_weights = limit_extreme_fragment_weights(fragment_weights, args.stringency)
 
     logging.info("Applying Gaussian smoothing ...")
-    motif_weights = smooth_weights_by_region(motif_weights, args.smoothing_sigma)
-    fragment_weights = smooth_fragment_weights_by_region(fragment_weights, args.smoothing_sigma)
+    motif_weights = smooth_weights(motif_weights, args.smoothing_sigma)
+    fragment_weights = smooth_fragment_weights(fragment_weights, args.smoothing_sigma)
 
     logging.info("Writing correction weights to files ...")
-    write_weights_to_tsv_by_region(motif_weights, correction_weights_file)
-    write_fragment_weights_to_tsv_by_region(fragment_weights, fragment_correction_weights_file)
+    write_weights_to_tsv(motif_weights, correction_weights_file)
+    write_fragment_weights_to_tsv(fragment_weights, fragment_correction_weights_file)
     logging.info("Correction weights written to files.")
 
     if output_bam_file:
         logging.info("Adding tags to BAM file ...")
-        region_tree = build_region_tree(regions)
-
-        parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif_weights, fragment_weights, fragment_min, fragment_max, num_cores, tmp_dir, region_tree)
+        parallel_process_bam_with_tags(bam_file, output_bam_file, chromosomes, motif_weights, fragment_weights, fragment_min, fragment_max, num_cores, tmp_dir)
         logging.info("Tagged BAM file written.")
 
     logging.info("Complete ...")

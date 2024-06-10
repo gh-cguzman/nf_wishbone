@@ -8,6 +8,7 @@ process EMCORRECTION {
     tuple val(meta), path(bam), path(bai)
     path(genome)
     path(blacklist)
+    path(regions)
 
     output:
     tuple val(meta), path("*.EMtagged.bam"), emit: bam
@@ -27,6 +28,7 @@ process EMCORRECTION {
     -cw ${bam.baseName}.EMtagged.em.weights.tsv \\
     -fcw ${bam.baseName}.EMtagged.fl.weights.tsv \\
     -cm ${params.em_norm} \\
-    -l ${bam.baseName}.EMtagged.log
+    -l ${bam.baseName}.EMtagged.log \\
+    -r $regions
     """
 }

@@ -112,11 +112,19 @@ ${colors.green}END MOTIF CORRECTION OPTIONS${colors.reset}
 ${dashedLine(monochrome_logs)}
 EM Correction?      ${params.em_correction}
 2bit File:          ${params.genome_2bit}
+Normalization:      ${params.em_norm}
 ${dashedLine(monochrome_logs)}
 
 ${colors.green}GCPARAGON OPTIONS${colors.reset}
 ${dashedLine(monochrome_logs)}
 Genome:             ${params.rgb}
+${dashedLine(monochrome_logs)}
+
+${colors.green}TFBSCOV OPTIONS${colors.reset}
+${dashedLine(monochrome_logs)}
+Save Matrix?        ${params.save_tfbscov_matrix}
+Window:             ${params.window}
+Batch Size:         ${params.batch_size}
 ${dashedLine(monochrome_logs)}
 
 ${colors.green}SKIP OPTIONS${colors.reset}
