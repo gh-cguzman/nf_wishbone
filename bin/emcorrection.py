@@ -512,7 +512,7 @@ def main():
     parser.add_argument('-l', '--log', type=str, default="process.log", help='Log file (default: process.log)')
     parser.add_argument('-n', '--num-cores', type=int, default=multiprocessing.cpu_count(), help='Number of CPU cores to use (default: all available cores)')
     parser.add_argument('-t', '--twobit', type=str, required=True, help='2bit file of the reference genome')
-    parser.add_argument('-s', '--num-simulations', type=int, default=270000000, help='Number of simulations to perform (default: 270M)')
+    parser.add_argument('-s', '--num-simulations', type=int, default=2_700_000_000, help='Number of simulations to perform (default: 2.7B)')
     parser.add_argument('-b', '--blacklist', type=str, required=True, help='BED file with blacklisted regions')
     parser.add_argument('-sod', '--stringency', type=int, default=3, help='Outlier detection stringency (default: 3)')
     parser.add_argument('-sg', '--smoothing-sigma', type=float, default=2.0, help='Sigma for Gaussian smoothing (default: 2.0)')
